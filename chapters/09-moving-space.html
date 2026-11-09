@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>9. Moving space: translate, rotate, scale · Shader Fragments</title>
+<meta name="description" content="Why you move coordinates instead of shapes, rotation derived from the unit circle, matrices as a shorthand, order of operations, and a 2D camera.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="../assets/icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+
+</head>
+<body data-page="chapter" data-root="..">
+<header class="top"><div class="top-in">
+  <a class="logo" href="../index.html"><span class="logo-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="word">Shader Fragments</span></a>
+  <nav class="nav" aria-label="Main"><a href="../index.html#contents">Contents</a><a href="../reference.html">Reference</a><a href="../playground.html">Playground</a></nav>
+</div></header>
+<main>
+<div class="wrap"><div class="chapter">
+<header class="ch-head">
+  <p class="eyebrow"><b>Part I · Foundations</b> · Chapter 9</p>
+  <h1>Moving space: translate, rotate, scale</h1>
+  <p class="lede">In p5.js you call <code>translate()</code> and <code>rotate()</code> and the drawing moves. A shader can't move a shape, because there's no shape object to move, only pixels asking questions. So instead you move the <em>question</em>: each pixel transforms its own coordinates before asking. This chapter explains why that runs backwards, builds rotation from the unit circle, and ends with a 2D camera.</p>
+  <details class="ch-toc" open><summary>In this chapter</summary><ol><li><a href="#backwards">Move the space, not the shape</a></li><li><a href="#rotation">Rotation, from scratch</a></li><li><a href="#matrix">The same thing, as a matrix</a></li><li><a href="#order">Order matters: spin or orbit</a></li><li><a href="#hierarchy">Transforms inside transforms: a solar system</a></li><li><a href="#camera">A 2D camera</a></li></ol></details>
+</header>
+<aside class="stage" id="workbench" data-start="move-scale" aria-label="Workbench: live shader and code"></aside>
+<article class="ch-body">
+
+
+
+<h2 id="backwards"><span class="sec-n">9.1</span>Move the space, not the shape</h2>
+<p>Every SDF from Chapter 8 describes a shape sitting at the origin. To draw a circle at the point c instead, each pixel asks the origin-circle a modified question: "if c were the origin, where would I be?" That's <code>p - c</code> (Chapter 7's arrow from c to the pixel). So the circle at c is <code>sdCircle(p - c, r)</code>.</p>
+<p>Notice the minus sign: to move the shape <em>right</em> by c, you move the coordinates <em>left</em> by c. Every transform works this way round, because you're applying it to the pixel's coordinates, not to the shape:</p>
+<div class="table-wrap"><table>
+<tr><th>To do this to the shape</th><th>do this to the coordinates</th></tr>
+<tr><td>move it by c</td><td><code>p - c</code></td></tr>
+<tr><td>make it s times bigger</td><td><code>p / s</code></td></tr>
+<tr><td>turn it by angle a</td><td>turn p by −a</td></tr>
+</table></div>
+<p>Scaling feels backwards at first. Dividing coordinates by 2 means the pixel that's 1 unit from the center now asks "am I inside?" with the coordinates of a point 0.5 from the center. The shape's edge, once at 0.5, is now reached by pixels at 1.0, so the shape looks twice as big.</p>
+<p>There's one more detail with scaling. After dividing by s, the SDF returns a distance measured in the shape's own (scaled) units. Multiply it by s to get back to real distance, or your smooth edges, outlines and glows will come out the wrong width:</p>
+<figure class="ex" id="ex-move-scale" data-ex="move-scale" data-label="Example 9.1" data-title="Moving and scaling a box by transforming the coordinates" data-cfg='{}'><figcaption><span class="ex-n">Example 9.1</span><span>Moving and scaling a box by transforming the coordinates</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>float sdBox(vec2 p, vec2 b) {
+    vec2 q = abs(p) - b;
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
+}
+
+vec3 field(float d, float px) {
+    vec3 col = d &gt; 0.0 ? vec3(0.95, 0.6, 0.3) : vec3(0.4, 0.65, 1.0);
+    col *= 1.0 - exp(-4.0 * abs(d));
+    col *= 0.8 + 0.2 * cos(125.66 * d);
+    return mix(col, vec3(1.0), 1.0 - smoothstep(0.0, 1.5 * px, abs(d)));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    vec2 pos = vec2(0.6 * sin(iTime * 0.7), 0.0);    // where the box should be
+    float s = 1.0 + 0.5 * sin(iTime);                // how big: 0.5 to 1.5 times
+
+    vec2 q = (uv - pos) / s;                         // move, then scale, the coordinates
+    float d = sdBox(q, vec2(0.3, 0.2)) * s;          // * s: back to real distance
+
+    fragColor = vec4(field(d, px), 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+float sdBox(vec2 p, vec2 b) {
+    vec2 q = abs(p) - b;
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
+}
+
+vec3 field(float d, float px) {
+    vec3 col = d > 0.0 ? vec3(0.95, 0.6, 0.3) : vec3(0.4, 0.65, 1.0);
+    col *= 1.0 - exp(-4.0 * abs(d));
+    col *= 0.8 + 0.2 * cos(125.66 * d);
+    return mix(col, vec3(1.0), 1.0 - smoothstep(0.0, 1.5 * px, abs(d)));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    vec2 pos = vec2(0.6 * sin(iTime * 0.7), 0.0);    // where the box should be
+    float s = 1.0 + 0.5 * sin(iTime);                // how big: 0.5 to 1.5 times
+
+    vec2 q = (uv - pos) / s;                         // move, then scale, the coordinates
+    float d = sdBox(q, vec2(0.3, 0.2)) * s;          // * s: back to real distance
+
+    fragColor = vec4(field(d, px), 1.0);
+}
+</script></figure>
+<details class="predict"><summary>Delete the <code>* s</code>. What happens to the bands as the box grows and shrinks?</summary>
+<div><p>The shape is still drawn in the right place at the right size, because the sign of d hasn't changed. But the bands stretch apart when the box is big and bunch together when it's small, because the distances are now in box units, not real units. The white edge line also gets thicker and thinner. Anything that relies on the distance being real (edges, outlines, glows, and 3D raymarching later) goes wrong.</p></div></details>
+
+<h2 id="rotation"><span class="sec-n">9.2</span>Rotation, from scratch</h2>
+<p>Moving and scaling are simple arithmetic. Rotation needs the one piece of real derivation in this chapter, and you already know everything it uses.</p>
+<p>Any point (x, y) can be read as a recipe: "x steps along the x axis's arrow (1, 0), plus y steps along the y axis's arrow (0, 1)". Now rotate the whole plane by an angle θ. The plane turns rigidly, like a sheet of paper pinned at the origin, so the recipe still holds: the rotated point is x steps along the <em>rotated</em> x arrow plus y steps along the <em>rotated</em> y arrow. So you only need to know where the two axis arrows go:</p>
+<ul>
+<li>The x arrow (1, 0) is the point at angle 0 on the unit circle. Turned by θ, it's the point at angle θ: <b>(cos θ, sin θ)</b>, straight from Chapter 5.</li>
+<li>The y arrow is always a quarter turn ahead of the x arrow, and Chapter 7's quarter-turn trick turns (cos θ, sin θ) into <b>(−sin θ, cos θ)</b>.</li>
+</ul>
+<p>Put the recipe together:</p>
+<div class="formula">rotated = x · (cos θ, sin θ) + y · (−sin θ, cos θ)
+        = (x cos θ − y sin θ,  x sin θ + y cos θ)</div>
+<div data-widget="rotation"></div>
+<p>In GLSL, as a function (angles in radians, positive turns counterclockwise):</p>
+<pre class="snip"><code>vec2 rotate(vec2 p, float a) {
+    float c = cos(a), s = sin(a);
+    return vec2(c * p.x - s * p.y, s * p.x + c * p.y);
+}</code></pre>
+<p>And because transforms run backwards, to turn a <em>shape</em> by a, you turn the coordinates by −a: <code>sdBox(rotate(p, -a), size)</code>.</p>
+<figure class="ex" id="ex-rotate-box" data-ex="rotate-box" data-label="Example 9.2" data-title="A turning box: rotate the coordinates the other way" data-cfg='{}'><figcaption><span class="ex-n">Example 9.2</span><span>A turning box: rotate the coordinates the other way</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>vec2 rotate(vec2 p, float a) {
+    float c = cos(a), s = sin(a);
+    return vec2(c * p.x - s * p.y, s * p.x + c * p.y);
+}
+
+float sdBox(vec2 p, vec2 b) {
+    vec2 q = abs(p) - b;
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
+}
+
+vec3 field(float d, float px) {
+    vec3 col = d &gt; 0.0 ? vec3(0.95, 0.6, 0.3) : vec3(0.4, 0.65, 1.0);
+    col *= 1.0 - exp(-4.0 * abs(d));
+    col *= 0.8 + 0.2 * cos(125.66 * d);
+    return mix(col, vec3(1.0), 1.0 - smoothstep(0.0, 1.5 * px, abs(d)));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    float angle = iTime * 0.5;                       // the shape turns counterclockwise
+    vec2 q = rotate(uv, -angle);                     // so the coordinates turn clockwise
+    float d = sdBox(q, vec2(0.6, 0.2));
+
+    fragColor = vec4(field(d, px), 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+vec2 rotate(vec2 p, float a) {
+    float c = cos(a), s = sin(a);
+    return vec2(c * p.x - s * p.y, s * p.x + c * p.y);
+}
+
+float sdBox(vec2 p, vec2 b) {
+    vec2 q = abs(p) - b;
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
+}
+
+vec3 field(float d, float px) {
+    vec3 col = d > 0.0 ? vec3(0.95, 0.6, 0.3) : vec3(0.4, 0.65, 1.0);
+    col *= 1.0 - exp(-4.0 * abs(d));
+    col *= 0.8 + 0.2 * cos(125.66 * d);
+    return mix(col, vec3(1.0), 1.0 - smoothstep(0.0, 1.5 * px, abs(d)));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    float angle = iTime * 0.5;                       // the shape turns counterclockwise
+    vec2 q = rotate(uv, -angle);                     // so the coordinates turn clockwise
+    float d = sdBox(q, vec2(0.6, 0.2));
+
+    fragColor = vec4(field(d, px), 1.0);
+}
+</script></figure>
+<p>Notice the whole distance field turns with the box, bands and all. Rotation doesn't stretch anything, so distances stay real and nothing needs correcting. (That's also why the dot product, which only depends on lengths and angles, doesn't change under rotation, as promised in Chapter 7.)</p>
+
+<h2 id="matrix"><span class="sec-n">9.3</span>The same thing, as a matrix</h2>
+<p>You'll see rotation written with <code>mat2</code> everywhere. A <b>matrix</b> here is just a compact way to store "where the axis arrows go". A <code>mat2</code> holds four numbers as two columns, and each column is an arrow:</p>
+<pre class="snip"><code>float c = cos(a), s = sin(a);
+mat2 m = mat2(c, s,        // first column:  where the x arrow goes
+              -s, c);      // second column: where the y arrow goes
+vec2 rotated = m * p;      // = p.x * (first column) + p.y * (second column)</code></pre>
+<p>Multiplying a matrix by a vector, <code>m * p</code>, means exactly the recipe from before: p.x steps along the first column plus p.y steps along the second. So a matrix isn't new math; it's the recipe, packed into a value you can pass around and reuse.</p>
+<aside class="box warn"><span class="box-t">Watch out: columns, and which side the vector is on</span><p>GLSL fills a matrix <b>column by column</b>, so the first two numbers you type are the first column. Read across a line of code and it looks like a row, which trips everyone up.</p><p>And the order of multiplication matters: <code>m * p</code> uses the columns, but <code>p * m</code> uses the rows, which for a rotation matrix turns the other way, by −a. That's why you'll see Shadertoy code write <code>p *= rot(a)</code> (meaning <code>p = p * rot(a)</code>), which turns the coordinates backwards and so turns the <em>shape</em> forwards. If a shape spins the wrong way, flip the sign of the angle.</p></aside>
+<p>Matrices can do more than rotate. Any two columns describe some way of moving the axis arrows: <code>mat2(2.0, 0.0, 0.0, 1.0)</code> stretches x by 2, and <code>mat2(1.0, 0.0, 0.5, 1.0)</code> leans the y arrow sideways (a shear). Rotation is the special case where both arrows stay length 1 and at right angles.</p>
+
+<h2 id="order"><span class="sec-n">9.4</span>Order matters: spin or orbit</h2>
+<p>Combining a move and a turn gives different results depending on the order. Both panels below use the same box, the same offset (0.5, 0) and the same angle, in opposite orders:</p>
+<figure class="ex long" id="ex-order" data-ex="order" data-label="Example 9.3" data-title="Move then turn (left) versus turn then move (right)" data-cfg='{}'><figcaption><span class="ex-n">Example 9.3</span><span>Move then turn (left) versus turn then move (right)</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>vec2 rotate(vec2 p, float a) {
+    float c = cos(a), s = sin(a);
+    return vec2(c * p.x - s * p.y, s * p.x + c * p.y);
+}
+
+float sdBox(vec2 p, vec2 b) {
+    vec2 q = abs(p) - b;
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    float panelW = iResolution.x / 2.0;                        // two panels side by side
+    float panel = floor(fragCoord.x / panelW);
+    vec2 local = vec2(fragCoord.x - panel * panelW, fragCoord.y);
+    vec2 p = (local * 2.0 - vec2(panelW, iResolution.y)) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    vec2 offset = vec2(0.5, 0.0);
+    vec2 q;
+    if (panel == 0.0) q = rotate(p - offset, -iTime);          // move to offset, then turn there
+    else              q = rotate(p, -iTime) - offset;          // turn around the center, then move
+
+    vec3 col = vec3(0.08, 0.09, 0.12);
+    col += 0.1 * (1.0 - smoothstep(0.0, 1.5 * px, abs(length(p) - 0.5)));   // a guide circle
+    float d = sdBox(q, vec2(0.2, 0.08));
+    col = mix(col, vec3(1.0, 0.6, 0.2), 1.0 - smoothstep(-px, px, d));
+    col = mix(col, vec3(1.0), 1.0 - smoothstep(-px, px, length(p) - 0.025));  // the center
+    if (local.x &lt; 1.5) col = vec3(0.3);
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn ex-more" type="button" data-label="Show all 30 lines">Show all 30 lines</button><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+vec2 rotate(vec2 p, float a) {
+    float c = cos(a), s = sin(a);
+    return vec2(c * p.x - s * p.y, s * p.x + c * p.y);
+}
+
+float sdBox(vec2 p, vec2 b) {
+    vec2 q = abs(p) - b;
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    float panelW = iResolution.x / 2.0;                        // two panels side by side
+    float panel = floor(fragCoord.x / panelW);
+    vec2 local = vec2(fragCoord.x - panel * panelW, fragCoord.y);
+    vec2 p = (local * 2.0 - vec2(panelW, iResolution.y)) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    vec2 offset = vec2(0.5, 0.0);
+    vec2 q;
+    if (panel == 0.0) q = rotate(p - offset, -iTime);          // move to offset, then turn there
+    else              q = rotate(p, -iTime) - offset;          // turn around the center, then move
+
+    vec3 col = vec3(0.08, 0.09, 0.12);
+    col += 0.1 * (1.0 - smoothstep(0.0, 1.5 * px, abs(length(p) - 0.5)));   // a guide circle
+    float d = sdBox(q, vec2(0.2, 0.08));
+    col = mix(col, vec3(1.0, 0.6, 0.2), 1.0 - smoothstep(-px, px, d));
+    col = mix(col, vec3(1.0), 1.0 - smoothstep(-px, px, length(p) - 0.025));  // the center
+    if (local.x < 1.5) col = vec3(0.3);
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<p>Read each line from the pixel's point of view, left to right:</p>
+<ul>
+<li><b>Left</b>, <code>rotate(p - offset, -t)</code>: first measure from the offset point, making it the origin, then turn around <em>that</em> origin. The box stays at the offset and spins in place.</li>
+<li><b>Right</b>, <code>rotate(p, -t) - offset</code>: first turn the whole space around the canvas center, then measure from the offset. The offset point itself is carried around by the turning space, so the box <b>orbits</b> the center, always keeping the same side toward it, like the Moon.</li>
+</ul>
+<p>To rotate a shape around some pivot point, measure from the pivot, rotate, and (if you want to stay in the same coordinates) add the pivot back: <code>rotate(p - pivot, -a) + pivot</code>. Or keep working in the pivot's own coordinates, as this pendulum does. In its own space it simply hangs straight down from the origin; the transform does all the swinging:</p>
+<figure class="ex long" id="ex-pendulum" data-ex="pendulum" data-label="Example 9.4" data-title="A pendulum: draw it hanging still, swing the space" data-cfg='{}'><figcaption><span class="ex-n">Example 9.4</span><span>A pendulum: draw it hanging still, swing the space</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>vec2 rotate(vec2 p, float a) {
+    float c = cos(a), s = sin(a);
+    return vec2(c * p.x - s * p.y, s * p.x + c * p.y);
+}
+
+float sdSegment(vec2 p, vec2 a, vec2 b) {
+    vec2 pa = p - a, ba = b - a;
+    float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+    return length(pa - ba * h);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    vec2 pivot = vec2(0.0, 0.85);
+    float angle = 0.7 * sin(iTime * 2.0);              // swing back and forth (radians)
+    vec2 q = rotate(uv - pivot, -angle);               // the pendulum's own coordinates
+
+    // In its own coordinates the pendulum hangs straight down from (0, 0).
+    float rod = sdSegment(q, vec2(0.0), vec2(0.0, -1.2)) - 0.012;
+    float bob = length(q - vec2(0.0, -1.2)) - 0.14;
+
+    vec3 col = vec3(0.08, 0.09, 0.12) + 0.04 * uv.y;
+    col = mix(col, vec3(0.6), 1.0 - smoothstep(-px, px, rod));
+    col = mix(col, vec3(1.0, 0.6, 0.2), 1.0 - smoothstep(-px, px, bob));
+    col = mix(col, vec3(0.9), 1.0 - smoothstep(-px, px, length(uv - pivot) - 0.03));
+
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn ex-more" type="button" data-label="Show all 30 lines">Show all 30 lines</button><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+vec2 rotate(vec2 p, float a) {
+    float c = cos(a), s = sin(a);
+    return vec2(c * p.x - s * p.y, s * p.x + c * p.y);
+}
+
+float sdSegment(vec2 p, vec2 a, vec2 b) {
+    vec2 pa = p - a, ba = b - a;
+    float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+    return length(pa - ba * h);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    vec2 pivot = vec2(0.0, 0.85);
+    float angle = 0.7 * sin(iTime * 2.0);              // swing back and forth (radians)
+    vec2 q = rotate(uv - pivot, -angle);               // the pendulum's own coordinates
+
+    // In its own coordinates the pendulum hangs straight down from (0, 0).
+    float rod = sdSegment(q, vec2(0.0), vec2(0.0, -1.2)) - 0.012;
+    float bob = length(q - vec2(0.0, -1.2)) - 0.14;
+
+    vec3 col = vec3(0.08, 0.09, 0.12) + 0.04 * uv.y;
+    col = mix(col, vec3(0.6), 1.0 - smoothstep(-px, px, rod));
+    col = mix(col, vec3(1.0, 0.6, 0.2), 1.0 - smoothstep(-px, px, bob));
+    col = mix(col, vec3(0.9), 1.0 - smoothstep(-px, px, length(uv - pivot) - 0.03));
+
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<aside class="box aha"><span class="box-t">// AHA</span><p>Draw every shape in its own simple coordinates, at the origin, upright, unit size. Then transform the coordinates to place it. The shape code never changes; only the question does.</p></aside>
+
+<h2 id="hierarchy"><span class="sec-n">9.5</span>Transforms inside transforms: a solar system</h2>
+<p>Positions can also be computed forwards, the normal way round: rotate a point to find where a planet is, then draw a circle there with <code>length(p - planet)</code>. This works nicely for circles, which look the same from every angle. Stacking these gives a hierarchy, where each object moves relative to its parent: a moon circles a planet that circles the sun. And with Chapter 7's dot product, each body can be lit by the sun:</p>
+<figure class="ex long" id="ex-solar" data-ex="solar" data-label="Example 9.5" data-title="A sun, a planet and its moon, lit from the center" data-cfg='{}'><figcaption><span class="ex-n">Example 9.5</span><span>A sun, a planet and its moon, lit from the center</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>vec2 rotate(vec2 p, float a) {
+    float c = cos(a), s = sin(a);
+    return vec2(c * p.x - s * p.y, s * p.x + c * p.y);
+}
+
+// A ball centered at c with radius r, lit by the sun at the origin.
+// Returns the color in .rgb and how much of this pixel it covers in .a
+vec4 ball(vec2 p, vec2 c, float r, vec3 albedo, float px) {
+    vec2 q = (p - c) / r;                              // -1..1 across the ball
+    float z = sqrt(max(1.0 - dot(q, q), 0.0));         // Chapter 7's ball
+    vec3 normal = vec3(q, z);
+    vec3 toSun = normalize(vec3(-c, 0.25));            // from the ball toward the origin
+    float light = max(dot(normal, toSun), 0.0);
+    float cover = 1.0 - smoothstep(-px, px, length(p - c) - r);
+    return vec4(albedo * (0.02 + light), cover);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    vec2 planet = rotate(vec2(0.62, 0.0), iTime * 0.4);           // circles the sun
+    vec2 moon   = planet + rotate(vec2(0.2, 0.0), iTime * 1.7);   // circles the planet
+
+    vec3 col = vec3(0.003, 0.003, 0.008);
+    col += 0.006 * (1.0 - smoothstep(0.0, 1.5 * px, abs(length(uv) - 0.62)));          // orbits
+    col += 0.004 * (1.0 - smoothstep(0.0, 1.5 * px, abs(length(uv - planet) - 0.2)));
+
+    float sun = length(uv) - 0.15;
+    col += vec3(1.0, 0.5, 0.15) * 0.008 / max(sun, 0.004);                             // glow
+    col = mix(col, vec3(1.0, 0.75, 0.4) * 2.0, 1.0 - smoothstep(-px, px, sun));
+
+    vec4 p = ball(uv, planet, 0.09, vec3(0.25, 0.5, 1.0), px);
+    col = mix(col, p.rgb, p.a);
+    vec4 m = ball(uv, moon, 0.035, vec3(0.7), px);
+    col = mix(col, m.rgb, m.a);
+
+    col = 1.0 - exp(-col);                         // tone map (Chapter 6)
+    fragColor = vec4(pow(col, vec3(1.0 / 2.2)), 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn ex-more" type="button" data-label="Show all 40 lines">Show all 40 lines</button><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+vec2 rotate(vec2 p, float a) {
+    float c = cos(a), s = sin(a);
+    return vec2(c * p.x - s * p.y, s * p.x + c * p.y);
+}
+
+// A ball centered at c with radius r, lit by the sun at the origin.
+// Returns the color in .rgb and how much of this pixel it covers in .a
+vec4 ball(vec2 p, vec2 c, float r, vec3 albedo, float px) {
+    vec2 q = (p - c) / r;                              // -1..1 across the ball
+    float z = sqrt(max(1.0 - dot(q, q), 0.0));         // Chapter 7's ball
+    vec3 normal = vec3(q, z);
+    vec3 toSun = normalize(vec3(-c, 0.25));            // from the ball toward the origin
+    float light = max(dot(normal, toSun), 0.0);
+    float cover = 1.0 - smoothstep(-px, px, length(p - c) - r);
+    return vec4(albedo * (0.02 + light), cover);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    vec2 planet = rotate(vec2(0.62, 0.0), iTime * 0.4);           // circles the sun
+    vec2 moon   = planet + rotate(vec2(0.2, 0.0), iTime * 1.7);   // circles the planet
+
+    vec3 col = vec3(0.003, 0.003, 0.008);
+    col += 0.006 * (1.0 - smoothstep(0.0, 1.5 * px, abs(length(uv) - 0.62)));          // orbits
+    col += 0.004 * (1.0 - smoothstep(0.0, 1.5 * px, abs(length(uv - planet) - 0.2)));
+
+    float sun = length(uv) - 0.15;
+    col += vec3(1.0, 0.5, 0.15) * 0.008 / max(sun, 0.004);                             // glow
+    col = mix(col, vec3(1.0, 0.75, 0.4) * 2.0, 1.0 - smoothstep(-px, px, sun));
+
+    vec4 p = ball(uv, planet, 0.09, vec3(0.25, 0.5, 1.0), px);
+    col = mix(col, p.rgb, p.a);
+    vec4 m = ball(uv, moon, 0.035, vec3(0.7), px);
+    col = mix(col, m.rgb, m.a);
+
+    col = 1.0 - exp(-col);                         // tone map (Chapter 6)
+    fragColor = vec4(pow(col, vec3(1.0 / 2.2)), 1.0);
+}
+</script></figure>
+<p>The moon's position is the planet's position plus its own rotated offset, so it inherits all the planet's motion. That's a <b>hierarchy</b> of transforms, the same idea as nesting <code>push()</code> and <code>pop()</code> in p5.js. The light math runs in linear values and gets tone mapped and gamma corrected at the end, exactly as Chapter 6 recommends.</p>
+
+<h2 id="camera"><span class="sec-n">9.6</span>A 2D camera</h2>
+<p>If you transform the coordinates once, at the very top of <code>mainImage</code>, everything drawn afterwards moves together. That single transform is a <b>camera</b>: it maps screen positions to positions in your world. Here the world is a grid with a few shapes, and the camera drifts, zooms and turns:</p>
+<figure class="ex long" id="ex-camera2d" data-ex="camera2d" data-label="Example 9.6" data-title="A camera is one transform from screen to world" data-cfg='{}'><figcaption><span class="ex-n">Example 9.6</span><span>A camera is one transform from screen to world</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>vec2 rotate(vec2 p, float a) {
+    float c = cos(a), s = sin(a);
+    return vec2(c * p.x - s * p.y, s * p.x + c * p.y);
+}
+
+float sdBox(vec2 p, vec2 b) {
+    vec2 q = abs(p) - b;
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
+}
+
+// The world, drawn in world units. It knows nothing about the camera.
+vec3 world(vec2 p, float px) {
+    vec3 col = vec3(0.08, 0.09, 0.12);
+    vec2 g = abs(fract(p + 0.5) - 0.5);                // distance to the nearest grid line
+    col += 0.12 * (1.0 - smoothstep(0.0, px, min(g.x, g.y)));
+    float d = length(p - vec2(1.0, 0.5)) - 0.4;
+    d = min(d, sdBox(p - vec2(-1.2, -0.3), vec2(0.5, 0.3)));
+    d = min(d, length(p - vec2(0.2, -1.4)) - 0.25);
+    return mix(col, vec3(1.0, 0.6, 0.2), 1.0 - smoothstep(-px, px, d));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+
+    vec2  camPos   = 0.8 * vec2(sin(iTime * 0.3), cos(iTime * 0.23));  // where it looks
+    float viewSize = 2.0 + sin(iTime * 0.5);                           // world units per half-height
+    float camTurn  = iTime * 0.1;                                      // how far it has turned
+
+    vec2 p = rotate(uv * viewSize, camTurn) + camPos;   // screen -&gt; world: scale, turn, move
+    float px = 2.0 * viewSize / iResolution.y;          // one pixel, in world units
+
+    fragColor = vec4(world(p, px), 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn ex-more" type="button" data-label="Show all 33 lines">Show all 33 lines</button><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+vec2 rotate(vec2 p, float a) {
+    float c = cos(a), s = sin(a);
+    return vec2(c * p.x - s * p.y, s * p.x + c * p.y);
+}
+
+float sdBox(vec2 p, vec2 b) {
+    vec2 q = abs(p) - b;
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
+}
+
+// The world, drawn in world units. It knows nothing about the camera.
+vec3 world(vec2 p, float px) {
+    vec3 col = vec3(0.08, 0.09, 0.12);
+    vec2 g = abs(fract(p + 0.5) - 0.5);                // distance to the nearest grid line
+    col += 0.12 * (1.0 - smoothstep(0.0, px, min(g.x, g.y)));
+    float d = length(p - vec2(1.0, 0.5)) - 0.4;
+    d = min(d, sdBox(p - vec2(-1.2, -0.3), vec2(0.5, 0.3)));
+    d = min(d, length(p - vec2(0.2, -1.4)) - 0.25);
+    return mix(col, vec3(1.0, 0.6, 0.2), 1.0 - smoothstep(-px, px, d));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+
+    vec2  camPos   = 0.8 * vec2(sin(iTime * 0.3), cos(iTime * 0.23));  // where it looks
+    float viewSize = 2.0 + sin(iTime * 0.5);                           // world units per half-height
+    float camTurn  = iTime * 0.1;                                      // how far it has turned
+
+    vec2 p = rotate(uv * viewSize, camTurn) + camPos;   // screen -> world: scale, turn, move
+    float px = 2.0 * viewSize / iResolution.y;          // one pixel, in world units
+
+    fragColor = vec4(world(p, px), 1.0);
+}
+</script></figure>
+<p>The <code>world</code> function draws everything in world coordinates and never mentions the camera. All the camera logic is one line. Chapter 13's 3D camera is the same idea with one more dimension: a transform from each pixel to a ray into the world.</p>
+
+<section class="summary">
+<h2>What you now know</h2>
+<ul>
+<li>Shaders transform the coordinates, not the shape, so everything runs backwards: move by c with <code>p - c</code>, scale by s with <code>p / s</code> (then multiply the distance by s), turn by a by turning p by −a.</li>
+<li>Rotation: the x arrow goes to (cos θ, sin θ), the y arrow to (−sin θ, cos θ), and the point keeps its recipe: (x cos θ − y sin θ, x sin θ + y cos θ).</li>
+<li>A <code>mat2</code> stores two columns, the new x and y arrows. <code>m * p</code> uses them; <code>p * m</code> turns the other way.</li>
+<li>Order matters: move-then-turn spins in place, turn-then-move orbits.</li>
+<li>Draw shapes in their own coordinates and transform the question. Transforms can nest into hierarchies.</li>
+<li>A camera is one transform from screen to world at the top of <code>mainImage</code>.</li>
+</ul>
+</section>
+
+<div class="try"><span class="box-t">Exercises</span>
+<p><b>1.</b> Make the <code>rotate-box</code> box spin around its top-right corner instead of its center.</p>
+<details><summary>Hint</summary><div><p>The corner is at (0.6, 0.2). Measure from it, rotate, and add it back: <code>rotate(uv - corner, -angle) + corner</code>.</p></div></details>
+<p><b>2.</b> Give the planet in <code>solar</code> a second moon on a wider, slower orbit.</p>
+<p><b>3.</b> Use <code>mat2(1.0, 0.0, 0.5, 1.0)</code> on the coordinates in <code>move-scale</code> to lean the box. Which way does it lean, and why the opposite of what the matrix seems to say?</p>
+<p><b>4.</b> Make the camera in <code>camera2d</code> follow the mouse.</p>
+</div>
+<p><b>Go deeper:</b> <a href="https://thebookofshaders.com/08/" target="_blank" rel="noopener">The Book of Shaders, chapter 8</a> on 2D matrices, and <a href="https://www.youtube.com/watch?v=kYB8IZa5AuE" target="_blank" rel="noopener">3Blue1Brown on linear transformations and matrices</a>.</p>
+
+<nav class="ch-nav" aria-label="Chapters"><a href="08-shapes-from-distance.html"><small>← Chapter 8</small><b>Shapes from distance</b></a><a class="next" href="10-repetition-and-polar.html"><small>Chapter 10 →</small><b>Repetition, symmetry and polar coordinates</b></a></nav>
+</article>
+</div></div>
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="../assets/reference.js"></script><script src="../assets/engine.js"></script><script src="../assets/editor.js"></script><script src="../assets/widgets.js"></script><script src="../assets/site.js"></script>
+</body>
+</html>

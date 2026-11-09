@@ -1,0 +1,654 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>11. Randomness and noise · Shader Fragments</title>
+<meta name="description" content="Hash functions explained, random tiles and mazes, value and gradient noise built from scratch, fBm, domain warping and Voronoi cells.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="../assets/icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+
+</head>
+<body data-page="chapter" data-root="..">
+<header class="top"><div class="top-in">
+  <a class="logo" href="../index.html"><span class="logo-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="word">Shader Fragments</span></a>
+  <nav class="nav" aria-label="Main"><a href="../index.html#contents">Contents</a><a href="../reference.html">Reference</a><a href="../playground.html">Playground</a></nav>
+</div></header>
+<main>
+<div class="wrap"><div class="chapter">
+<header class="ch-head">
+  <p class="eyebrow"><b>Part I · Foundations</b> · Chapter 11</p>
+  <h1>Randomness and noise</h1>
+  <p class="lede">A shader can't roll dice, and it can't remember what it rolled last frame. Yet shaders are full of organic randomness: clouds, marble, wood, fire, cells. All of it comes from one strange-looking line of code, a <b>hash</b>, plus the blending ideas you already know. This chapter builds the whole family from that line up.</p>
+  <details class="ch-toc" open><summary>In this chapter</summary><ol><li><a href="#hash">Randomness without memory: hash functions</a></li><li><a href="#truchet">Random choices: Truchet tiles</a></li><li><a href="#value-noise">Smooth randomness: value noise</a></li><li><a href="#gradient-noise">Better noise: gradients instead of heights</a></li><li><a href="#fbm">Nature is fractal: fBm</a></li><li><a href="#warp">Domain warping: noise feeding noise</a></li><li><a href="#voronoi">Cells: Voronoi</a></li></ol></details>
+</header>
+<aside class="stage" id="workbench" data-start="hash-plot" aria-label="Workbench: live shader and code"></aside>
+<article class="ch-body">
+
+
+
+<h2 id="hash"><span class="sec-n">11.1</span>Randomness without memory: hash functions</h2>
+<p>In p5.js, <code>random()</code> gives a different number every call. A shader can't work like that. If each pixel picked a new random number every frame, the picture would flicker like TV static. And there's no way to store a number and reuse it next frame (until Chapter 15).</p>
+<p>The solution is to make randomness a <b>function</b>: feed in a position, get back a number that <em>looks</em> random but is always the same for the same input. Such a function is called a <b>hash</b>. Here's the classic one, which you'll find in thousands of shaders:</p>
+<pre class="snip"><code>float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}</code></pre>
+<p>It looks like magic numbers, but each step has a job:</p>
+<ol>
+<li><code>dot(p, vec2(127.1, 311.7))</code> squashes the two numbers into one, mixing x and y with very different weights so that, say, (1, 2) and (2, 1) don't give the same result.</li>
+<li><code>sin(…)</code> turns that into a smoothly wiggling number between −1 and 1.</li>
+<li><code>* 43758.5453</code> blows it up enormously. A tiny change in the input now becomes a big change in the output.</li>
+<li><code>fract(…)</code> keeps only the digits after the decimal point. Those digits change so fast with the input that neighboring inputs give unrelated-looking answers.</li>
+</ol>
+<p>You can watch this happen. The plot below shows <code>fract(sin(x) * k)</code>. With a small k it's clearly a wave. Turn k up, and the wave wiggles faster than the pixels can follow, until neighboring pixels land on unrelated heights and it looks like noise:</p>
+<figure class="ex" id="ex-hash-plot" data-ex="hash-plot" data-label="Example 11.1" data-title="fract(sin(x) * k): a wave wiggling too fast to follow" data-cfg='{}'><figcaption><span class="ex-n">Example 11.1</span><span>fract(sin(x) * k): a wave wiggling too fast to follow</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>float f(float x, float k) {
+    return fract(sin(x) * k);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 p = fragCoord / iResolution.xy * vec2(12.0, 1.3) - vec2(0.0, 0.15);   // x 0..12, y -0.15..1.15
+    float px = 1.3 / iResolution.y;
+
+    float k = pow(43758.5453, 0.5 - 0.5 * cos(iTime * 0.3));   // sweeps 1 .. 43758.5 and back
+    // float k = 10.0;                                         // or pick one yourself
+
+    vec3 col = vec3(0.07, 0.08, 0.1);
+    col += 0.15 * (1.0 - smoothstep(0.0, px, min(abs(p.y), abs(p.y - 1.0))));  // y = 0 and y = 1
+    float y = f(p.x, k);
+    if (p.y &gt; 0.0 &amp;&amp; p.y &lt; y) col += vec3(1.0, 0.65, 0.2) * 0.25;             // shade under the curve
+    col = mix(col, vec3(1.0, 0.65, 0.2), 1.0 - smoothstep(0.0, 3.0 * px, abs(p.y - y)));
+
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+float f(float x, float k) {
+    return fract(sin(x) * k);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 p = fragCoord / iResolution.xy * vec2(12.0, 1.3) - vec2(0.0, 0.15);   // x 0..12, y -0.15..1.15
+    float px = 1.3 / iResolution.y;
+
+    float k = pow(43758.5453, 0.5 - 0.5 * cos(iTime * 0.3));   // sweeps 1 .. 43758.5 and back
+    // float k = 10.0;                                         // or pick one yourself
+
+    vec3 col = vec3(0.07, 0.08, 0.1);
+    col += 0.15 * (1.0 - smoothstep(0.0, px, min(abs(p.y), abs(p.y - 1.0))));  // y = 0 and y = 1
+    float y = f(p.x, k);
+    if (p.y > 0.0 && p.y < y) col += vec3(1.0, 0.65, 0.2) * 0.25;             // shade under the curve
+    col = mix(col, vec3(1.0, 0.65, 0.2), 1.0 - smoothstep(0.0, 3.0 * px, abs(p.y - y)));
+
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<p>It isn't truly random: it's a perfectly predictable formula. That's exactly what makes it useful. Same input, same output, so the randomness holds still from frame to frame. The specific numbers don't matter much; they just need to be "unrelated" enough that no pattern shows. (This sine-based hash can show faint patterns on some GPUs at very large inputs. If that ever bites you, search for "hash without sine" by Dave Hoskins for a sturdier drop-in.)</p>
+
+<h3>What to feed it</h3>
+<p>The input decides what stays constant. Feed it a tile id from Chapter 10 and each tile gets one random number. Add <code>floor(iTime)</code> and the dice are re-rolled once a second. Feed it the pixel coordinate plus the time, and you get static:</p>
+<figure class="ex" id="ex-hash-tiles" data-ex="hash-tiles" data-label="Example 11.2" data-title="Random per tile (left), re-rolled each second (middle), per pixel per frame (right)" data-cfg='{}'><figcaption><span class="ex-n">Example 11.2</span><span>Random per tile (left), re-rolled each second (middle), per pixel per frame (right)</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.y;
+    vec2 id = floor(uv * 8.0);                         // 8 tiles per unit of height
+    float panel = floor(fragCoord.x / (iResolution.x / 3.0));
+
+    float r;
+    if (panel == 0.0)      r = hash(id);                         // fixed forever
+    else if (panel == 1.0) r = hash(id + floor(iTime));          // new roll each second
+    else                   r = hash(fragCoord + fract(iTime) * 100.0);   // every pixel, every frame
+
+    vec3 col = vec3(r);
+    if (mod(fragCoord.x, iResolution.x / 3.0) &lt; 2.0) col = vec3(1.0, 0.6, 0.2);   // dividers
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.y;
+    vec2 id = floor(uv * 8.0);                         // 8 tiles per unit of height
+    float panel = floor(fragCoord.x / (iResolution.x / 3.0));
+
+    float r;
+    if (panel == 0.0)      r = hash(id);                         // fixed forever
+    else if (panel == 1.0) r = hash(id + floor(iTime));          // new roll each second
+    else                   r = hash(fragCoord + fract(iTime) * 100.0);   // every pixel, every frame
+
+    vec3 col = vec3(r);
+    if (mod(fragCoord.x, iResolution.x / 3.0) < 2.0) col = vec3(1.0, 0.6, 0.2);   // dividers
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+
+<h2 id="truchet"><span class="sec-n">11.2</span>Random choices: Truchet tiles</h2>
+<p>A random number can make a choice. In 1704, the priest Sébastien Truchet studied tiles that can be laid in different orientations. Here's a modern version: each tile holds two quarter-circle arcs linking the midpoints of its edges. A hash flips half the tiles at random, and the arcs join up across tiles into an endless maze:</p>
+<figure class="ex" id="ex-truchet" data-ex="truchet" data-label="Example 11.3" data-title="Truchet tiles: a random flip per tile makes a maze" data-cfg='{}'><figcaption><span class="ex-n">Example 11.3</span><span>Truchet tiles: a random flip per tile makes a maze</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 * 4.0 / iResolution.y;
+    uv = uv * 4.0 + iTime * 0.2;                 // 4 tiles per unit, drifting
+
+    vec2 id = floor(uv);
+    vec2 p = fract(uv) - 0.5;
+
+    if (hash(id) &lt; 0.5) p.x = -p.x;              // flip a random half of the tiles (a mirror!)
+
+    // two arcs: quarter circles of radius 0.5 around opposite corners
+    float d = min(abs(length(p - 0.5) - 0.5), abs(length(p + 0.5) - 0.5));
+    float line = 1.0 - smoothstep(0.07 - px, 0.07 + px, d);
+
+    vec3 col = mix(vec3(0.08, 0.09, 0.12), vec3(1.0, 0.75, 0.4), line);
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 * 4.0 / iResolution.y;
+    uv = uv * 4.0 + iTime * 0.2;                 // 4 tiles per unit, drifting
+
+    vec2 id = floor(uv);
+    vec2 p = fract(uv) - 0.5;
+
+    if (hash(id) < 0.5) p.x = -p.x;              // flip a random half of the tiles (a mirror!)
+
+    // two arcs: quarter circles of radius 0.5 around opposite corners
+    float d = min(abs(length(p - 0.5) - 0.5), abs(length(p + 0.5) - 0.5));
+    float line = 1.0 - smoothstep(0.07 - px, 0.07 + px, d);
+
+    vec3 col = mix(vec3(0.08, 0.09, 0.12), vec3(1.0, 0.75, 0.4), line);
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<details class="predict"><summary>Change <code>hash(id) &lt; 0.5</code> to <code>hash(id) &lt; 0.0</code> (never flip). What do you get?</summary>
+<div><p>Perfectly regular rows of waves. The maze only appears when neighboring tiles disagree: the randomness isn't creating the paths, it's breaking the symmetry of a pattern that was already there. A lot of generative art works this way: a strict system, plus a little controlled randomness.</p></div></details>
+
+<h2 id="value-noise"><span class="sec-n">11.3</span>Smooth randomness: value noise</h2>
+<p>A hash per tile gives blocky randomness: every tile is a flat, unrelated color. Nature isn't blocky. Clouds and hills are random, but <em>smoothly</em> random: nearby points have similar values. That's what <b>noise</b> means in graphics: randomness with no sharp jumps.</p>
+<p>The simplest way to get it: put a random value at every grid corner, and for each point inside a tile, blend the values of its four surrounding corners. Blend along x on the bottom edge and on the top edge, then blend those two results along y. This is called <b>bilinear interpolation</b>, and it's just three <code>mix</code> calls:</p>
+<div data-widget="bilinear"></div>
+<p>The widget shows why one detail matters. A straight blend (<code>mix</code> with t = f) is smooth inside each tile, but the slope changes suddenly at tile edges, which shows up as visible creases along the grid. Blending with <code>f * f * (3 - 2 * f)</code> instead, which is the curve inside smoothstep, starts and ends flat, so neighboring tiles meet without a crease.</p>
+<figure class="ex" id="ex-value-noise" data-ex="value-noise" data-label="Example 11.4" data-title="Value noise: random corners, smoothly blended" data-cfg='{}'><figcaption><span class="ex-n">Example 11.4</span><span>Value noise: random corners, smoothly blended</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float noise(vec2 p) {
+    vec2 i = floor(p);                    // which tile
+    vec2 f = fract(p);                    // where inside it, 0..1
+    vec2 u = f * f * (3.0 - 2.0 * f);     // the smooth blend curve (try u = f)
+
+    float a = hash(i);                    // the four corners' random values
+    float b = hash(i + vec2(1.0, 0.0));
+    float c = hash(i + vec2(0.0, 1.0));
+    float d = hash(i + vec2(1.0, 1.0));
+
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);   // bottom edge, top edge, then up
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.y;
+    vec2 p = uv * 8.0 + vec2(iTime * 0.5, 0.0);
+
+    float n = noise(p);
+    if (uv.x &lt; 0.4) n = hash(floor(p));   // left strip: the raw random tiles it's built from
+
+    fragColor = vec4(vec3(n), 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float noise(vec2 p) {
+    vec2 i = floor(p);                    // which tile
+    vec2 f = fract(p);                    // where inside it, 0..1
+    vec2 u = f * f * (3.0 - 2.0 * f);     // the smooth blend curve (try u = f)
+
+    float a = hash(i);                    // the four corners' random values
+    float b = hash(i + vec2(1.0, 0.0));
+    float c = hash(i + vec2(0.0, 1.0));
+    float d = hash(i + vec2(1.0, 1.0));
+
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);   // bottom edge, top edge, then up
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.y;
+    vec2 p = uv * 8.0 + vec2(iTime * 0.5, 0.0);
+
+    float n = noise(p);
+    if (uv.x < 0.4) n = hash(floor(p));   // left strip: the raw random tiles it's built from
+
+    fragColor = vec4(vec3(n), 1.0);
+}
+</script></figure>
+
+<h2 id="gradient-noise"><span class="sec-n">11.4</span>Better noise: gradients instead of heights</h2>
+<p>Value noise has a tell: its hills and valleys tend to sit on the grid, because the extremes are always at the corners. In 1983, after working on the film <i>Tron</i> and growing tired of how machine-like computer graphics looked, Ken Perlin found a better idea. It later won him an Academy Award. Instead of a random <em>height</em> at each corner, give each corner a random <em>slope</em>: a direction in which it rises.</p>
+<p>Each corner then contributes a tilted plane: zero at the corner itself, going up in its random direction and down the other way. "How high is that plane at this point?" is a dot product (Chapter 7) of the corner's direction with the arrow from the corner to the point. Blend the four planes with the same smooth curve, and the result is <b>gradient noise</b> (Perlin's version is called Perlin noise):</p>
+<pre class="snip"><code>vec2 grad(vec2 corner) {                          // a random direction for each corner
+    float a = hash(corner) * 6.28318;
+    return vec2(cos(a), sin(a));
+}
+
+float gnoise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    float a = dot(grad(i + vec2(0.0, 0.0)), f - vec2(0.0, 0.0));   // each corner's plane,
+    float b = dot(grad(i + vec2(1.0, 0.0)), f - vec2(1.0, 0.0));   // measured at this point
+    float c = dot(grad(i + vec2(0.0, 1.0)), f - vec2(0.0, 1.0));
+    float d = dot(grad(i + vec2(1.0, 1.0)), f - vec2(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);   // roughly -0.7..0.7
+}</code></pre>
+<figure class="ex long" id="ex-noise-compare" data-ex="noise-compare" data-label="Example 11.5" data-title="Value noise (left) and gradient noise (right), same grid" data-cfg='{}'><figcaption><span class="ex-n">Example 11.5</span><span>Value noise (left) and gradient noise (right), same grid</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float vnoise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
+               mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+
+vec2 grad(vec2 corner) {
+    float a = hash(corner) * 6.28318;
+    return vec2(cos(a), sin(a));
+}
+
+float gnoise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    float a = dot(grad(i + vec2(0.0, 0.0)), f - vec2(0.0, 0.0));
+    float b = dot(grad(i + vec2(1.0, 0.0)), f - vec2(1.0, 0.0));
+    float c = dot(grad(i + vec2(0.0, 1.0)), f - vec2(0.0, 1.0));
+    float d = dot(grad(i + vec2(1.0, 1.0)), f - vec2(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.y;
+    vec2 p = uv * 6.0 + vec2(0.0, iTime * 0.3);
+
+    float n = fragCoord.x &lt; iResolution.x * 0.5
+        ? vnoise(p)                         // 0..1
+        : gnoise(p) * 0.7 + 0.5;            // about -0.7..0.7, moved to 0..1
+
+    vec3 col = vec3(n);
+    vec2 g = abs(fract(p + 0.5) - 0.5);     // faint grid lines, to compare against
+    col = mix(col, vec3(1.0, 0.6, 0.2), 0.35 * (1.0 - smoothstep(0.0, 0.02, min(g.x, g.y))));
+    if (abs(fragCoord.x - iResolution.x * 0.5) &lt; 1.5) col = vec3(1.0);
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn ex-more" type="button" data-label="Show all 40 lines">Show all 40 lines</button><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float vnoise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
+               mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+
+vec2 grad(vec2 corner) {
+    float a = hash(corner) * 6.28318;
+    return vec2(cos(a), sin(a));
+}
+
+float gnoise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    float a = dot(grad(i + vec2(0.0, 0.0)), f - vec2(0.0, 0.0));
+    float b = dot(grad(i + vec2(1.0, 0.0)), f - vec2(1.0, 0.0));
+    float c = dot(grad(i + vec2(0.0, 1.0)), f - vec2(0.0, 1.0));
+    float d = dot(grad(i + vec2(1.0, 1.0)), f - vec2(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.y;
+    vec2 p = uv * 6.0 + vec2(0.0, iTime * 0.3);
+
+    float n = fragCoord.x < iResolution.x * 0.5
+        ? vnoise(p)                         // 0..1
+        : gnoise(p) * 0.7 + 0.5;            // about -0.7..0.7, moved to 0..1
+
+    vec3 col = vec3(n);
+    vec2 g = abs(fract(p + 0.5) - 0.5);     // faint grid lines, to compare against
+    col = mix(col, vec3(1.0, 0.6, 0.2), 0.35 * (1.0 - smoothstep(0.0, 0.02, min(g.x, g.y))));
+    if (abs(fragCoord.x - iResolution.x * 0.5) < 1.5) col = vec3(1.0);
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<p>On the left, light and dark blobs cluster at grid corners. On the right, the features fall anywhere, and the gradient noise is exactly 0.5 (mid-grey) at every corner, because each plane is zero at its own corner. Both are used everywhere; gradient noise usually looks more natural.</p>
+
+<h2 id="fbm"><span class="sec-n">11.5</span>Nature is fractal: fBm</h2>
+<p>Look at a coastline on a map. It has big bays. Zoom in on one bay, and its edge has smaller coves. Zoom into a cove, and there are rocks with even smaller wiggles. Mountains, clouds and bark all have this property: detail at every scale, each smaller scale weaker than the one above. Things like this are called <b>fractal</b>.</p>
+<p>Noise has detail at only one scale, set by the grid size. To fake nature, add several layers of noise, called <b>octaves</b> (the word comes from music, where each octave doubles the frequency). Each octave has twice the frequency and half the amplitude of the one before:</p>
+<pre class="snip"><code>float fbm(vec2 p) {
+    float sum = 0.0;
+    float amp = 0.5;
+    for (int i = 0; i &lt; 6; i++) {     // 6 octaves
+        sum += amp * noise(p);
+        p *= 2.0;                     // twice the detail ("lacunarity")
+        amp *= 0.5;                   // at half the strength ("gain")
+    }
+    return sum;
+}</code></pre>
+<p>This is <b>fractal Brownian motion</b>, fBm for short (the name comes from physics; don't worry about it). Big shapes from the first octave, medium bumps from the next, fine grain from the last. It's the most-used trick in procedural graphics:</p>
+<figure class="ex long" id="ex-fbm" data-ex="fbm" data-label="Example 11.6" data-title="fBm: six octaves of noise make clouds" data-cfg='{}'><figcaption><span class="ex-n">Example 11.6</span><span>fBm: six octaves of noise make clouds</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float noise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
+               mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+
+float fbm(vec2 p) {
+    float sum = 0.0, amp = 0.5;
+    for (int i = 0; i &lt; 6; i++) {          // try 1, 2, 3 octaves to see the layers build up
+        sum += amp * noise(p);
+        p *= 2.0;
+        amp *= 0.5;
+    }
+    return sum;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.y;
+    float n = fbm(uv * 3.0 + vec2(iTime * 0.1, 0.0));
+
+    vec3 sky = mix(vec3(0.25, 0.45, 0.85), vec3(0.6, 0.75, 0.95), uv.y);
+    vec3 col = mix(sky, vec3(1.0), smoothstep(0.45, 0.8, n));   // only the high values are cloud
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn ex-more" type="button" data-label="Show all 29 lines">Show all 29 lines</button><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float noise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
+               mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+
+float fbm(vec2 p) {
+    float sum = 0.0, amp = 0.5;
+    for (int i = 0; i < 6; i++) {          // try 1, 2, 3 octaves to see the layers build up
+        sum += amp * noise(p);
+        p *= 2.0;
+        amp *= 0.5;
+    }
+    return sum;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.y;
+    float n = fbm(uv * 3.0 + vec2(iTime * 0.1, 0.0));
+
+    vec3 sky = mix(vec3(0.25, 0.45, 0.85), vec3(0.6, 0.75, 0.95), uv.y);
+    vec3 col = mix(sky, vec3(1.0), smoothstep(0.45, 0.8, n));   // only the high values are cloud
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<details class="predict"><summary>What do you expect with only 1 octave? And what if <code>amp *= 0.5</code> becomes <code>amp *= 0.8</code>?</summary>
+<div><p>One octave is plain value noise: soft, smooth, unconvincing blobs. With a gain of 0.8, the small octaves stay almost as strong as the big ones, so the clouds become rough and grainy, like rock or static. A gain of 0.5 is the classic natural-looking balance.</p></div></details>
+
+<h3>Noise as an ingredient</h3>
+<p>Noise rarely appears raw. Usually it nudges something else. Wood is rings (Chapter 10's distance from a center) pushed around by noise; marble is stripes (a sine wave) pushed around by fBm:</p>
+<figure class="ex long" id="ex-materials" data-ex="materials" data-label="Example 11.7" data-title="Wood (left) and marble (right): noise bending simple patterns" data-cfg='{}'><figcaption><span class="ex-n">Example 11.7</span><span>Wood (left) and marble (right): noise bending simple patterns</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float noise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
+               mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+
+float fbm(vec2 p) {
+    float sum = 0.0, amp = 0.5;
+    for (int i = 0; i &lt; 5; i++) { sum += amp * noise(p); p *= 2.0; amp *= 0.5; }
+    return sum;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.y;
+    vec3 col;
+    if (fragCoord.x &lt; iResolution.x * 0.5) {
+        // wood: rings around a point below the canvas, stretched sideways, wobbled by noise
+        vec2 p = (uv - vec2(0.4, -1.5)) * vec2(0.3, 1.0);
+        float rings = length(p) * 14.0 + noise(uv * vec2(4.0, 16.0)) * 1.2;
+        float grain = fract(rings);
+        col = mix(vec3(0.55, 0.32, 0.15), vec3(0.8, 0.55, 0.3), smoothstep(0.0, 0.8, grain));
+    } else {
+        // marble: a sine wave whose position is pushed around by fBm
+        float v = sin(uv.x * 10.0 + uv.y * 4.0 + fbm(uv * 4.0) * 7.0);
+        col = mix(vec3(0.95, 0.94, 0.9), vec3(0.3, 0.33, 0.38), pow(1.0 - abs(v), 6.0));
+    }
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn ex-more" type="button" data-label="Show all 33 lines">Show all 33 lines</button><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float noise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
+               mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+
+float fbm(vec2 p) {
+    float sum = 0.0, amp = 0.5;
+    for (int i = 0; i < 5; i++) { sum += amp * noise(p); p *= 2.0; amp *= 0.5; }
+    return sum;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.y;
+    vec3 col;
+    if (fragCoord.x < iResolution.x * 0.5) {
+        // wood: rings around a point below the canvas, stretched sideways, wobbled by noise
+        vec2 p = (uv - vec2(0.4, -1.5)) * vec2(0.3, 1.0);
+        float rings = length(p) * 14.0 + noise(uv * vec2(4.0, 16.0)) * 1.2;
+        float grain = fract(rings);
+        col = mix(vec3(0.55, 0.32, 0.15), vec3(0.8, 0.55, 0.3), smoothstep(0.0, 0.8, grain));
+    } else {
+        // marble: a sine wave whose position is pushed around by fBm
+        float v = sin(uv.x * 10.0 + uv.y * 4.0 + fbm(uv * 4.0) * 7.0);
+        col = mix(vec3(0.95, 0.94, 0.9), vec3(0.3, 0.33, 0.38), pow(1.0 - abs(v), 6.0));
+    }
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+
+<h2 id="warp"><span class="sec-n">11.6</span>Domain warping: noise feeding noise</h2>
+<p>The marble used fBm to push the input of another function. Take that idea all the way: push the input of fBm with fBm itself. Instead of asking for <code>fbm(p)</code>, ask for <code>fbm(p + fbm(p))</code>. The inner fBm shoves each pixel's lookup somewhere else, so straight features bend and swirl. Do it twice and you get smoke and marbled paper. This recipe and its numbers come from Inigo Quilez's article on warping:</p>
+<figure class="ex long" id="ex-warp" data-ex="warp" data-label="Example 11.8" data-title="Domain warping: fbm(p + 4 · fbm(p + 4 · fbm(p)))" data-cfg='{}'><figcaption><span class="ex-n">Example 11.8</span><span>Domain warping: fbm(p + 4 · fbm(p + 4 · fbm(p)))</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float noise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
+               mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+
+float fbm(vec2 p) {
+    float sum = 0.0, amp = 0.5;
+    for (int i = 0; i &lt; 5; i++) { sum += amp * noise(p); p *= 2.0; amp *= 0.5; }
+    return sum;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 p = fragCoord / iResolution.y * 3.0;
+    float t = iTime * 0.1;
+
+    // first warp: q is a 2D offset made of two fbm lookups
+    vec2 q = vec2(fbm(p + vec2(0.0, 0.0) + t),
+                  fbm(p + vec2(5.2, 1.3) - t));
+    // second warp: r is computed at the already-pushed position
+    vec2 r = vec2(fbm(p + 4.0 * q + vec2(1.7, 9.2)),
+                  fbm(p + 4.0 * q + vec2(8.3, 2.8)));
+    float f = fbm(p + 4.0 * r);
+
+    // the in-between values q and r make good color inputs too
+    vec3 col = mix(vec3(0.10, 0.12, 0.30), vec3(0.95, 0.55, 0.25), clamp(f * f * 2.5, 0.0, 1.0));
+    col = mix(col, vec3(0.05, 0.35, 0.40), clamp(length(q) - 0.6, 0.0, 1.0));
+    col = mix(col, vec3(1.0, 0.92, 0.8), clamp(r.x * r.x, 0.0, 1.0) * 0.5);
+    fragColor = vec4(col * (0.5 + f), 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn ex-more" type="button" data-label="Show all 35 lines">Show all 35 lines</button><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float noise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
+               mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+
+float fbm(vec2 p) {
+    float sum = 0.0, amp = 0.5;
+    for (int i = 0; i < 5; i++) { sum += amp * noise(p); p *= 2.0; amp *= 0.5; }
+    return sum;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 p = fragCoord / iResolution.y * 3.0;
+    float t = iTime * 0.1;
+
+    // first warp: q is a 2D offset made of two fbm lookups
+    vec2 q = vec2(fbm(p + vec2(0.0, 0.0) + t),
+                  fbm(p + vec2(5.2, 1.3) - t));
+    // second warp: r is computed at the already-pushed position
+    vec2 r = vec2(fbm(p + 4.0 * q + vec2(1.7, 9.2)),
+                  fbm(p + 4.0 * q + vec2(8.3, 2.8)));
+    float f = fbm(p + 4.0 * r);
+
+    // the in-between values q and r make good color inputs too
+    vec3 col = mix(vec3(0.10, 0.12, 0.30), vec3(0.95, 0.55, 0.25), clamp(f * f * 2.5, 0.0, 1.0));
+    col = mix(col, vec3(0.05, 0.35, 0.40), clamp(length(q) - 0.6, 0.0, 1.0));
+    col = mix(col, vec3(1.0, 0.92, 0.8), clamp(r.x * r.x, 0.0, 1.0) * 0.5);
+    fragColor = vec4(col * (0.5 + f), 1.0);
+}
+</script></figure>
+<p>The offsets like <code>vec2(5.2, 1.3)</code> just make the two parts of q look up different, unrelated stretches of noise, so they don't move in lockstep. And q, r and f don't only shape the picture: they're three different smoothly varying numbers at every pixel, which is why they make such rich color inputs.</p>
+<aside class="box aha"><span class="box-t">// AHA</span><p>Noise is smooth randomness. Its real power is as an ingredient: add octaves for detail, use it to push around the input of another pattern, or feed it to itself. Everything organic is a few lines on top of one hash.</p></aside>
+
+<h2 id="voronoi"><span class="sec-n">11.7</span>Cells: Voronoi</h2>
+<p>Back in Chapter 7, two points split the canvas into two regions by which one is closer. Scatter many points and the regions become a mosaic of cells, like soap bubbles, giraffe spots, cracked mud or leaf cells. This is a <b>Voronoi diagram</b> (also called cellular or Worley noise).</p>
+<p>Checking every point for every pixel would be slow. The trick: put exactly one random point in each tile of a grid. Then a pixel's nearest point is almost always in its own tile or one of the eight around it, so each pixel checks only those nine:</p>
+<figure class="ex" id="ex-voronoi" data-ex="voronoi" data-label="Example 11.9" data-title="Voronoi: the nearest of nine random points" data-cfg='{}'><figcaption><span class="ex-n">Example 11.9</span><span>Voronoi: the nearest of nine random points</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>vec2 hash2(vec2 p) {                       // two random numbers for one input
+    p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
+    return fract(sin(p) * 43758.5453);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 p = fragCoord / iResolution.y * 6.0;
+    vec2 id = floor(p);
+    vec2 f = fract(p);
+
+    float d1 = 8.0, d2 = 8.0;              // nearest and second-nearest distances so far
+    vec2 nearest = vec2(0.0);
+    for (int y = -1; y &lt;= 1; y++)
+    for (int x = -1; x &lt;= 1; x++) {
+        vec2 nb = vec2(float(x), float(y));                   // a neighboring tile
+        vec2 pt = hash2(id + nb);                             // its random point, 0..1 in that tile
+        pt = 0.5 + 0.4 * sin(iTime * 0.8 + 6.28318 * pt);     // let the points drift
+        float d = length(nb + pt - f);                        // from this pixel to that point
+        if (d &lt; d1) { d2 = d1; d1 = d; nearest = id + nb; }
+        else if (d &lt; d2) { d2 = d; }
+    }
+
+    vec3 cell = 0.5 + 0.5 * cos(6.28318 * (hash2(nearest).x + vec3(0.0, 0.33, 0.67)));
+    vec3 col = cell * (1.0 - 0.6 * d1);                       // darker away from the point
+    col *= smoothstep(0.02, 0.06, d2 - d1);                   // dark borders where d1 ≈ d2
+    // col = vec3(d1);                                        // just the distance: bubbles
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+vec2 hash2(vec2 p) {                       // two random numbers for one input
+    p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
+    return fract(sin(p) * 43758.5453);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 p = fragCoord / iResolution.y * 6.0;
+    vec2 id = floor(p);
+    vec2 f = fract(p);
+
+    float d1 = 8.0, d2 = 8.0;              // nearest and second-nearest distances so far
+    vec2 nearest = vec2(0.0);
+    for (int y = -1; y <= 1; y++)
+    for (int x = -1; x <= 1; x++) {
+        vec2 nb = vec2(float(x), float(y));                   // a neighboring tile
+        vec2 pt = hash2(id + nb);                             // its random point, 0..1 in that tile
+        pt = 0.5 + 0.4 * sin(iTime * 0.8 + 6.28318 * pt);     // let the points drift
+        float d = length(nb + pt - f);                        // from this pixel to that point
+        if (d < d1) { d2 = d1; d1 = d; nearest = id + nb; }
+        else if (d < d2) { d2 = d; }
+    }
+
+    vec3 cell = 0.5 + 0.5 * cos(6.28318 * (hash2(nearest).x + vec3(0.0, 0.33, 0.67)));
+    vec3 col = cell * (1.0 - 0.6 * d1);                       // darker away from the point
+    col *= smoothstep(0.02, 0.06, d2 - d1);                   // dark borders where d1 ≈ d2
+    // col = vec3(d1);                                        // just the distance: bubbles
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<p>Three things to read from the result:</p>
+<ul>
+<li><b>d1</b>, the distance to the nearest point, makes soft bubbles around each point.</li>
+<li><b>The id</b> of the nearest point gives each cell a flat random color.</li>
+<li><b>d2 − d1</b> is small exactly where two points are almost equally near, which is the border between their cells. That's how the dark cracks are drawn.</li>
+</ul>
+
+<section class="summary">
+<h2>What you now know</h2>
+<ul>
+<li>A hash is a function that scrambles its input into a random-looking 0..1 number. Same input, same output, so nothing flickers.</li>
+<li>What you feed the hash decides what's random: per tile (<code>floor</code>), per second (<code>floor(iTime)</code>), per pixel.</li>
+<li>Value noise: random values at grid corners, blended with <code>f * f * (3 - 2f)</code>. Gradient noise: random slopes at corners, which looks more natural.</li>
+<li>fBm: add octaves, each double the frequency and half the amplitude. Nature's detail-at-every-scale.</li>
+<li>Noise is an ingredient: it bends stripes into marble and rings into wood. Domain warping feeds fBm into itself.</li>
+<li>Voronoi: one random point per tile, check the 3 × 3 neighborhood, use d1, the id, or d2 − d1.</li>
+</ul>
+</section>
+
+<div class="try"><span class="box-t">Exercises</span>
+<p><b>1.</b> In <code>truchet</code>, give each tile its own color using a second hash.</p>
+<details><summary>Solution</summary><div><pre class="snip"><code>vec3 tint = 0.5 + 0.5 * cos(6.28318 * (hash(id + 7.0) + vec3(0.0, 0.33, 0.67)));
+vec3 col = mix(vec3(0.08, 0.09, 0.12), tint, line);</code></pre></div></details>
+<p><b>2.</b> Turn the clouds in <code>fbm</code> into a mountain range: treat the fBm of x alone as a height, and color everything below it dark.</p>
+<details><summary>Hint</summary><div><pre class="snip"><code>float h = fbm(vec2(uv.x * 2.0 + iTime * 0.1, 0.0)) * 0.8;
+vec3 col = uv.y &lt; h ? vec3(0.15, 0.18, 0.22) : vec3(0.95, 0.6, 0.4);</code></pre></div></details>
+<p><b>3.</b> Make <code>voronoi</code> look like cracked dry mud: light brown cells, dark cracks, no color variation.</p>
+<p><b>4.</b> In <code>warp</code>, change the two <code>4.0</code> multipliers. What happens at 1.0? At 8.0?</p>
+</div>
+<p><b>Go deeper:</b> The Book of Shaders chapters on <a href="https://thebookofshaders.com/10/" target="_blank" rel="noopener">random</a>, <a href="https://thebookofshaders.com/11/" target="_blank" rel="noopener">noise</a>, <a href="https://thebookofshaders.com/12/" target="_blank" rel="noopener">cellular noise</a> and <a href="https://thebookofshaders.com/13/" target="_blank" rel="noopener">fractal Brownian motion</a>, and <a href="https://iquilezles.org/articles/warp/" target="_blank" rel="noopener">Inigo Quilez on domain warping</a>.</p>
+
+<nav class="ch-nav" aria-label="Chapters"><a href="10-repetition-and-polar.html"><small>← Chapter 10</small><b>Repetition, symmetry and polar coordinates</b></a><a class="next" href="12-composing-a-piece.html"><small>Chapter 12 →</small><b>Composing a piece</b></a></nav>
+</article>
+</div></div>
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="../assets/reference.js"></script><script src="../assets/engine.js"></script><script src="../assets/editor.js"></script><script src="../assets/widgets.js"></script><script src="../assets/site.js"></script>
+</body>
+</html>

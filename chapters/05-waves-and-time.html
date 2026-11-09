@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>5. Waves and time: sin, cos and animation · Shader Fragments</title>
+<meta name="description" content="Radians, the unit circle, amplitude, frequency and phase, and iTime: animation as a function of time.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="../assets/icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+
+</head>
+<body data-page="chapter" data-root="..">
+<header class="top"><div class="top-in">
+  <a class="logo" href="../index.html"><span class="logo-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="word">Shader Fragments</span></a>
+  <nav class="nav" aria-label="Main"><a href="../index.html#contents">Contents</a><a href="../reference.html">Reference</a><a href="../playground.html">Playground</a></nav>
+</div></header>
+<main>
+<div class="wrap"><div class="chapter">
+<header class="ch-head">
+  <p class="eyebrow"><b>Part I · Foundations</b> · Chapter 5</p>
+  <h1>Waves and time: sin, cos and animation</h1>
+  <p class="lede">A shader forgets everything between frames, yet shaders are full of motion. The trick is a clock that every pixel can read, and a function that turns a clock into smooth back-and-forth movement. That function is the sine, and this chapter builds it from a point walking around a circle.</p>
+  <details class="ch-toc" open><summary>In this chapter</summary><ol><li><a href="#angles">Angles, and why radians</a></li><li><a href="#unit-circle">The unit circle: where sin and cos come from</a></li><li><a href="#sine-graph">The sine wave</a></li><li><a href="#amp-freq-phase">Amplitude, frequency and phase</a></li><li><a href="#remap">From -1..1 to 0..1</a></li><li><a href="#time">Time: iTime</a></li><li><a href="#traveling">Waves that travel</a></li><li><a href="#combine">Adding waves together</a></li><li><a href="#other-waves">Other repeating shapes</a></li></ol></details>
+</header>
+<aside class="stage" id="workbench" data-start="wave-plot" aria-label="Workbench: live shader and code"></aside>
+<article class="ch-body">
+
+
+
+<h2 id="angles"><span class="sec-n">5.1</span>Angles, and why radians</h2>
+<p>You probably measure angles in <b>degrees</b>: a full turn is 360°, a right angle is 90°. That number 360 is an old human choice. Mathematics, and every GLSL function, uses a more natural unit, the <b>radian</b>.</p>
+<aside class="box math"><span class="box-t">Math from zero: the radian</span>
+<p>Take a circle of radius 1. Start at the right-hand edge and walk counterclockwise along the circle. When you have walked a distance of exactly 1 (one radius), the angle you've turned through is <b>one radian</b>, about 57.3°.</p>
+<p>The whole way round a circle of radius r is 2πr long, where π ≈ 3.14159. For radius 1 that's 2π ≈ 6.28318. So:</p>
+<div class="formula">full turn  = 2π radians ≈ 6.28318   (360°)
+half turn  = π radians  ≈ 3.14159   (180°)
+quarter    = π/2        ≈ 1.5708    (90°)</div>
+<p>The nice thing about radians: the angle and the distance walked along a unit circle are the same number. To convert, <code>radians(degrees)</code> and <code>degrees(radians)</code> are built in, or multiply degrees by π / 180. You'll see the constant 6.28318 (2π, sometimes called τ, “tau”) all over shader code. It means “one full turn”.</p>
+</aside>
+
+<h2 id="unit-circle"><span class="sec-n">5.2</span>The unit circle: where sin and cos come from</h2>
+<p>Put a circle of radius 1 around the origin, called the <b>unit circle</b>. Pick an angle θ (the Greek letter theta) measured counterclockwise from the positive x axis, and walk to that point on the circle. That point has an x coordinate and a y coordinate, and those two numbers have names:</p>
+<div class="formula">cos θ  =  the x of the point at angle θ
+sin θ  =  the y of the point at angle θ</div>
+<p>That's the actual definition: cosine and sine are the coordinates of a point on the unit circle. Drag the point below, or press Play and watch what its x and y do as it goes round:</p>
+<div data-widget="unit-circle"></div>
+<p>A few facts fall straight out of the picture:</p>
+<ul>
+<li>Both always stay between -1 and 1, because the circle has radius 1.</li>
+<li>They repeat every full turn, 2π. A function that repeats is called <b>periodic</b>, and 2π is its <b>period</b>.</li>
+<li>At θ = 0 the point is at (1, 0): cos 0 = 1 and sin 0 = 0. A quarter turn later, at the top, it's (0, 1).</li>
+<li>Cosine is sine shifted by a quarter turn. They're the same wave, started at different times.</li>
+<li>By Pythagoras (Chapter 7), x² + y² = 1 on the unit circle, so sin²θ + cos²θ = 1 always.</li>
+</ul>
+
+<h2 id="sine-graph"><span class="sec-n">5.3</span>The sine wave</h2>
+<p>Plot sin θ against θ and you get the most important curve in graphics: the smooth hump that rises, falls and rises again forever. This plotter is set up for waves: the grid lines on the x axis are quarter turns (π/2 apart) and the bright horizontal lines are at -1, 0 and 1.</p>
+<figure class="ex" id="ex-wave-plot" data-ex="wave-plot" data-label="Example 5.1" data-title="f(x) = sin(x), one full period and a bit" data-cfg='{}'><figcaption><span class="ex-n">Example 5.1</span><span>f(x) = sin(x), one full period and a bit</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>float f(float x) {
+    return sin(x);   // try cos(x), sin(2.0 * x), 0.5 * sin(x)
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    // View: x from about -0.4 to 6.7 (just over one full turn), y from -2 to 2.
+    vec2 p = (fragCoord - 0.5 * iResolution.xy) / iResolution.y * 4.0 + vec2(3.14159, 0.0);
+    float px = 4.0 / iResolution.y;
+
+    vec3 col = vec3(0.07, 0.08, 0.1);
+    float gx = abs(fract(p.x / 1.5708 + 0.5) - 0.5) * 1.5708;      // quarter turns
+    float gy = abs(fract(p.y * 2.0 + 0.5) - 0.5) / 2.0;            // every 0.5
+    col += 0.07 * (1.0 - smoothstep(0.0, px, min(gx, gy)));
+    float lines = min(abs(p.y), abs(abs(p.y) - 1.0));              // y = 0 and y = ±1
+    col += 0.2 * (1.0 - smoothstep(0.0, 1.5 * px, min(lines, abs(p.x))));
+
+    float y = f(p.x);
+    float slope = (f(p.x + px) - f(p.x - px)) / (2.0 * px);
+    float d = abs(p.y - y) / sqrt(1.0 + slope * slope);
+    col = mix(col, vec3(0.5, 0.85, 1.0), 1.0 - smoothstep(0.0, 2.0 * px, d));
+
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+float f(float x) {
+    return sin(x);   // try cos(x), sin(2.0 * x), 0.5 * sin(x)
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    // View: x from about -0.4 to 6.7 (just over one full turn), y from -2 to 2.
+    vec2 p = (fragCoord - 0.5 * iResolution.xy) / iResolution.y * 4.0 + vec2(3.14159, 0.0);
+    float px = 4.0 / iResolution.y;
+
+    vec3 col = vec3(0.07, 0.08, 0.1);
+    float gx = abs(fract(p.x / 1.5708 + 0.5) - 0.5) * 1.5708;      // quarter turns
+    float gy = abs(fract(p.y * 2.0 + 0.5) - 0.5) / 2.0;            // every 0.5
+    col += 0.07 * (1.0 - smoothstep(0.0, px, min(gx, gy)));
+    float lines = min(abs(p.y), abs(abs(p.y) - 1.0));              // y = 0 and y = ±1
+    col += 0.2 * (1.0 - smoothstep(0.0, 1.5 * px, min(lines, abs(p.x))));
+
+    float y = f(p.x);
+    float slope = (f(p.x + px) - f(p.x - px)) / (2.0 * px);
+    float d = abs(p.y - y) / sqrt(1.0 + slope * slope);
+    col = mix(col, vec3(0.5, 0.85, 1.0), 1.0 - smoothstep(0.0, 2.0 * px, d));
+
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+
+<h2 id="amp-freq-phase"><span class="sec-n">5.4</span>Amplitude, frequency and phase</h2>
+<p>Three numbers reshape a sine wave, and you'll use all three constantly:</p>
+<div class="formula">y = amplitude * sin(frequency * x + phase)</div>
+<ul>
+<li><b>Amplitude</b> stretches it vertically. 0.5 × sin(x) swings between -0.5 and 0.5.</li>
+<li><b>Frequency</b> squeezes it horizontally. sin(2x) completes two cycles in the time sin(x) does one, so its period is 2π / 2 = π.</li>
+<li><b>Phase</b> slides it sideways. sin(x + π/2) is the cosine.</li>
+</ul>
+<figure class="ex" id="ex-wave-afp" data-ex="wave-afp" data-label="Example 5.2" data-title="Amplitude, frequency and phase, each with its own number" data-cfg='{}'><figcaption><span class="ex-n">Example 5.2</span><span>Amplitude, frequency and phase, each with its own number</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>float f(float x) {
+    float amplitude = 0.8;   // click these numbers and drag
+    float frequency = 3.0;
+    float phase     = 0.0;
+    return amplitude * sin(frequency * x + phase);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 p = (fragCoord - 0.5 * iResolution.xy) / iResolution.y * 4.0 + vec2(3.14159, 0.0);
+    float px = 4.0 / iResolution.y;
+    vec3 col = vec3(0.07, 0.08, 0.1);
+    float gx = abs(fract(p.x / 1.5708 + 0.5) - 0.5) * 1.5708;
+    float gy = abs(fract(p.y * 2.0 + 0.5) - 0.5) / 2.0;
+    col += 0.07 * (1.0 - smoothstep(0.0, px, min(gx, gy)));
+    float lines = min(abs(p.y), abs(abs(p.y) - 1.0));
+    col += 0.2 * (1.0 - smoothstep(0.0, 1.5 * px, min(lines, abs(p.x))));
+    float y = f(p.x);
+    float slope = (f(p.x + px) - f(p.x - px)) / (2.0 * px);
+    float d = abs(p.y - y) / sqrt(1.0 + slope * slope);
+    col = mix(col, vec3(0.5, 0.85, 1.0), 1.0 - smoothstep(0.0, 2.0 * px, d));
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+float f(float x) {
+    float amplitude = 0.8;   // click these numbers and drag
+    float frequency = 3.0;
+    float phase     = 0.0;
+    return amplitude * sin(frequency * x + phase);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 p = (fragCoord - 0.5 * iResolution.xy) / iResolution.y * 4.0 + vec2(3.14159, 0.0);
+    float px = 4.0 / iResolution.y;
+    vec3 col = vec3(0.07, 0.08, 0.1);
+    float gx = abs(fract(p.x / 1.5708 + 0.5) - 0.5) * 1.5708;
+    float gy = abs(fract(p.y * 2.0 + 0.5) - 0.5) / 2.0;
+    col += 0.07 * (1.0 - smoothstep(0.0, px, min(gx, gy)));
+    float lines = min(abs(p.y), abs(abs(p.y) - 1.0));
+    col += 0.2 * (1.0 - smoothstep(0.0, 1.5 * px, min(lines, abs(p.x))));
+    float y = f(p.x);
+    float slope = (f(p.x + px) - f(p.x - px)) / (2.0 * px);
+    float d = abs(p.y - y) / sqrt(1.0 + slope * slope);
+    col = mix(col, vec3(0.5, 0.85, 1.0), 1.0 - smoothstep(0.0, 2.0 * px, d));
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<p>Load it into the workbench, click on <code>0.0</code> after <code>phase</code> and drag the slider: the wave slides sideways. Keep that in mind, because in a moment the phase is going to be <em>time</em>.</p>
+
+<h2 id="remap"><span class="sec-n">5.5</span>From -1..1 to 0..1</h2>
+<p>Colors live between 0 and 1, but sine swings between -1 and 1. You already know the fix from Chapter 3: multiply by 0.5 (now -0.5..0.5) and add 0.5 (now 0..1).</p>
+<div class="formula">0.5 + 0.5 * sin(x)      →  swings smoothly between 0 and 1</div>
+<p>You'll see this exact expression in a huge number of shaders.</p>
+
+<h2 id="time"><span class="sec-n">5.6</span>Time: iTime</h2>
+<p>Now the clock. The runner provides <code>iTime</code>, a float holding the number of seconds since the shader started: 0.0, then 0.016, 0.033… growing by about 1/60 every frame. It's a uniform, so every pixel sees the same value in a given frame.</p>
+<p>A number that just grows isn't motion yet. Feed it to sine and it becomes a smooth swing:</p>
+<figure class="ex" id="ex-pulse" data-ex="pulse" data-label="Example 5.3" data-title="sin(iTime): the whole canvas breathes" data-cfg='{}'><figcaption><span class="ex-n">Example 5.3</span><span>sin(iTime): the whole canvas breathes</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+
+    float pulse = 0.5 + 0.5 * sin(iTime);   // 0 → 1 → 0 … one cycle every 2π ≈ 6.3 seconds
+
+    vec3 col = mix(vec3(0.1, 0.2, 0.5), vec3(1.0, 0.6, 0.2), pulse);
+    col *= 0.6 + 0.4 * uv.y;                // a little vertical shading so it isn't flat
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+
+    float pulse = 0.5 + 0.5 * sin(iTime);   // 0 → 1 → 0 … one cycle every 2π ≈ 6.3 seconds
+
+    vec3 col = mix(vec3(0.1, 0.2, 0.5), vec3(1.0, 0.6, 0.2), pulse);
+    col *= 0.6 + 0.4 * uv.y;                // a little vertical shading so it isn't flat
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<p>Multiplying the time changes the speed: <code>sin(iTime * 2.0)</code> cycles twice as fast. A cycle every second needs a frequency of 2π: <code>sin(iTime * 6.28318)</code>.</p>
+<p>Notice what is <em>not</em> happening. No pixel remembers anything. Each frame, each pixel computes its color fresh from the current time. The motion exists only because the input (iTime) changes and the output follows.</p>
+
+<h2 id="traveling"><span class="sec-n">5.7</span>Waves that travel</h2>
+<p>Now combine space and time in one sine. Each pixel uses its own x as part of the phase:</p>
+<figure class="ex" id="ex-travel" data-ex="travel" data-label="Example 5.4" data-title="sin(x × 20 − time × 3): stripes that move" data-cfg='{}'><figcaption><span class="ex-n">Example 5.4</span><span>sin(x × 20 − time × 3): stripes that move</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+
+    float wave = 0.5 + 0.5 * sin(uv.x * 20.0 - iTime * 3.0);
+
+    fragColor = vec4(vec3(wave), 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+
+    float wave = 0.5 + 0.5 * sin(uv.x * 20.0 - iTime * 3.0);
+
+    fragColor = vec4(vec3(wave), 1.0);
+}
+</script></figure>
+<p>Read it as amplitude, frequency and phase: the frequency in space is 20 (that's 20 / 2π ≈ 3.2 stripes across the canvas), and the phase is <code>-iTime * 3.0</code>, which decreases steadily. You saw what changing the phase does: it slides the wave. A steadily changing phase slides it steadily, so the stripes travel to the right.</p>
+<details class="predict"><summary>Change the minus to a plus: sin(uv.x * 20.0 + iTime * 3.0). Which way do the stripes move now? What about 20.0 → 60.0?</summary>
+<div><p>With +, the stripes travel to the left. Here's one way to see it: a stripe is where the inside of the sine has a fixed value, say 0. With +, that's where uv.x × 20 = −iTime × 3, so as time grows the stripe's x must shrink: it moves left. With 60 instead of 20, the stripes are three times narrower and, at the same phase speed, move three times slower across the screen.</p></div></details>
+<aside class="box aha"><span class="box-t">// AHA</span><p>Animation is a function of time. Ask “what color is this pixel at time t?”, and motion appears by itself, without anything being moved or remembered.</p></aside>
+
+<h2 id="combine"><span class="sec-n">5.8</span>Adding waves together</h2>
+<p>Add two waves and you get a new, more complicated wave. Where both are high, the sum is higher; where one is high and the other low, they cancel. This is <b>interference</b>, and with waves running in different directions it makes the classic “plasma” effect:</p>
+<figure class="ex" id="ex-interference" data-ex="interference" data-label="Example 5.5" data-title="Three waves in different directions, added up" data-cfg='{}'><figcaption><span class="ex-n">Example 5.5</span><span>Three waves in different directions, added up</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float t = iTime;
+
+    float v = 0.0;
+    v += sin(uv.x * 6.0 + t);                       // a wave along x
+    v += sin(uv.y * 5.0 - t * 1.3);                 // a wave along y
+    v += sin((uv.x + uv.y) * 4.0 + t * 0.7);        // a diagonal wave
+    v /= 3.0;                                       // the sum ranges -3..3, now -1..1
+
+    vec3 col = 0.5 + 0.5 * cos(v * 3.0 + vec3(0.0, 2.0, 4.0));   // a color for each value
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float t = iTime;
+
+    float v = 0.0;
+    v += sin(uv.x * 6.0 + t);                       // a wave along x
+    v += sin(uv.y * 5.0 - t * 1.3);                 // a wave along y
+    v += sin((uv.x + uv.y) * 4.0 + t * 0.7);        // a diagonal wave
+    v /= 3.0;                                       // the sum ranges -3..3, now -1..1
+
+    vec3 col = 0.5 + 0.5 * cos(v * 3.0 + vec3(0.0, 2.0, 4.0));   // a color for each value
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<p>The last line uses a trick worth understanding now, because Chapter 6 builds on it. <code>v * 3.0 + vec3(0.0, 2.0, 4.0)</code> is a vec3: the same number with three different offsets. cos is applied slot by slot, so red, green and blue each get a cosine of v, shifted by a different phase. As v changes, the three channels rise and fall out of step, and that cycles through hues.</p>
+<p>You can now read the shader Shadertoy shows you when you click “New”:</p>
+<figure class="ex" id="ex-shadertoy-new" data-ex="shadertoy-new" data-label="Example 5.6" data-title="Shadertoy&#x27;s default shader, which you can now read" data-cfg='{}'><figcaption><span class="ex-n">Example 5.6</span><span>Shadertoy's default shader, which you can now read</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    // Normalized pixel coordinates (from 0 to 1)
+    vec2 uv = fragCoord / iResolution.xy;
+
+    // Time varying pixel color
+    vec3 col = 0.5 + 0.5 * cos(iTime + uv.xyx + vec3(0, 2, 4));
+
+    // Output to screen
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    // Normalized pixel coordinates (from 0 to 1)
+    vec2 uv = fragCoord / iResolution.xy;
+
+    // Time varying pixel color
+    vec3 col = 0.5 + 0.5 * cos(iTime + uv.xyx + vec3(0, 2, 4));
+
+    // Output to screen
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<p>Line by line: uv runs 0..1 (Chapter 3). <code>uv.xyx</code> is a swizzle making a vec3 from x, y, x (Chapter 2). Adding <code>iTime</code> and three phases 0, 2, 4 gives each channel its own cosine (above). <code>0.5 + 0.5 * …</code> remaps -1..1 to 0..1 (this chapter). Notice <code>vec3(0, 2, 4)</code> uses ints inside a constructor, which GLSL allows.</p>
+
+<h2 id="other-waves"><span class="sec-n">5.9</span>Other repeating shapes</h2>
+<p>Sine is the smoothest repeating shape, but not the only one. Using the tools from Chapter 4:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>wave</th><th>code (0..1, one cycle per unit)</th><th>character</th></tr></thead>
+<tbody>
+<tr><td>sine</td><td><code>0.5 + 0.5 * sin(x * 6.28318)</code></td><td>smooth, natural</td></tr>
+<tr><td>sawtooth</td><td><code>fract(x)</code></td><td>rises, then snaps back</td></tr>
+<tr><td>triangle</td><td><code>abs(fract(x) - 0.5) * 2.0</code></td><td>linear up and down</td></tr>
+<tr><td>square</td><td><code>step(0.5, fract(x))</code></td><td>on, off, on, off</td></tr>
+</tbody>
+</table></div>
+<figure class="ex" id="ex-wave-shapes" data-ex="wave-shapes" data-label="Example 5.7" data-title="Four waves, moving: sine, saw, triangle, square" data-cfg='{}'><figcaption><span class="ex-n">Example 5.7</span><span>Four waves, moving: sine, saw, triangle, square</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    float x = uv.x * 4.0 - iTime * 0.5;        // four cycles across, sliding
+
+    float v;
+    if (uv.y &gt; 0.75)      v = 0.5 + 0.5 * sin(x * 6.28318);   // sine
+    else if (uv.y &gt; 0.5)  v = fract(x);                      // sawtooth
+    else if (uv.y &gt; 0.25) v = abs(fract(x) - 0.5) * 2.0;     // triangle
+    else                  v = step(0.5, fract(x));           // square
+
+    fragColor = vec4(v, v * 0.7, 0.3, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    float x = uv.x * 4.0 - iTime * 0.5;        // four cycles across, sliding
+
+    float v;
+    if (uv.y > 0.75)      v = 0.5 + 0.5 * sin(x * 6.28318);   // sine
+    else if (uv.y > 0.5)  v = fract(x);                      // sawtooth
+    else if (uv.y > 0.25) v = abs(fract(x) - 0.5) * 2.0;     // triangle
+    else                  v = step(0.5, fract(x));           // square
+
+    fragColor = vec4(v, v * 0.7, 0.3, 1.0);
+}
+</script></figure>
+
+<section class="summary">
+<h2>What you now know</h2>
+<ul>
+<li>Angles in GLSL are in radians: a full turn is 2π ≈ 6.28318.</li>
+<li>cos θ and sin θ are the x and y of the point at angle θ on the unit circle; both swing between -1 and 1 and repeat every 2π.</li>
+<li><code>amplitude * sin(frequency * x + phase)</code>: stretch, squeeze, slide.</li>
+<li><code>0.5 + 0.5 * sin(x)</code> remaps a wave to 0..1.</li>
+<li><code>iTime</code> is seconds since start. Putting it in the phase of a sine makes motion; mixing it with position makes waves travel.</li>
+<li>Adding waves makes interference; a vec3 of phase offsets gives each color channel its own wave.</li>
+</ul>
+</section>
+
+<div class="try"><span class="box-t">Exercises</span>
+<p><b>1.</b> Make the canvas fade between black and white once every 2 seconds.</p>
+<details><summary>Hint</summary><div><p>One cycle every 2 seconds means the inside of sin should grow by 2π every 2 seconds: <code>iTime * 3.14159</code>.</p></div></details>
+<p><b>2.</b> Make vertical stripes that move upward.</p>
+<details><summary>Solution</summary><div><pre class="snip"><code>vec2 uv = fragCoord / iResolution.xy;
+float v = 0.5 + 0.5 * sin(uv.y * 30.0 - iTime * 4.0);   // stripes along y travel up
+fragColor = vec4(vec3(v), 1.0);</code></pre></div></details>
+<p><b>3.</b> In the interference example, add a fourth wave that depends on the distance from the center, <code>length(uv)</code>. What shape do its crests make?</p>
+<details><summary>Answer</summary><div><p><code>v += sin(length(uv) * 10.0 - t * 2.0);</code> (and divide by 4.0). Its crests are rings, because all points at the same distance from the center are a circle. The rings travel outward.</p></div></details>
+</div>
+<p><b>Go deeper:</b> <a href="https://graphtoy.com/" target="_blank" rel="noopener">Graphtoy</a> is ideal for playing with amplitude, frequency and phase. <a href="https://thebookofshaders.com/05/" target="_blank" rel="noopener">The Book of Shaders, chapter 5</a> has more shaping with sine.</p>
+
+<nav class="ch-nav" aria-label="Chapters"><a href="04-shaping-functions.html"><small>← Chapter 4</small><b>Shaping functions: drawing with math</b></a><a class="next" href="06-color.html"><small>Chapter 6 →</small><b>Color: light, gradients and palettes</b></a></nav>
+</article>
+</div></div>
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="../assets/reference.js"></script><script src="../assets/engine.js"></script><script src="../assets/editor.js"></script><script src="../assets/widgets.js"></script><script src="../assets/site.js"></script>
+</body>
+</html>

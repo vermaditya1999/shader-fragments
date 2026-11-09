@@ -1,0 +1,481 @@
+<!--meta
+{"num": 14, "slug": "shadows-and-worlds", "part": 2, "title": "3D, part 2: shadows, atmosphere and worlds", "summary": "Hard and soft shadows, ambient occlusion, fog, a look-at camera built from cross products, infinite repetition, twisting space and noise terrain.", "hero": "mood", "start": "shadows"}
+-->
+<p class="lede">Chapter 13's scene was correct but plain: no shadows, no air, a camera stuck looking straight ahead. Each of those is a few more lines on the same skeleton. This chapter adds them one at a time, then uses everything to build three worlds: a sculpture at golden hour, an infinite lattice, and a mountain range made of noise.</p>
+
+<h2 id="shadows">Shadows: is anything in the way?</h2>
+<p>Diffuse lighting asks whether a surface <em>faces</em> the light. A shadow asks whether anything <em>blocks</em> it. You already have the tool for that question: from the point you're shading, march a second ray toward the light. If it hits something, the light is blocked.</p>
+<script type="text/x-glsl-snippet">
+float hardShadow(vec3 p, vec3 lightDir) {
+    float t = 0.02;                          // start a little away from the surface itself
+    for (int i = 0; i < 64; i++) {
+        float h = map(p + lightDir * t);
+        if (h < 0.001) return 0.0;           // something is in the way: shadow
+        t += h;
+        if (t > 10.0) break;                 // reached open sky
+    }
+    return 1.0;                              // nothing in the way: lit
+}
+</script>
+<p>Why start at <code>t = 0.02</code>? The point you're shading is <em>on</em> a surface, so <code>map</code> there is almost zero, and a ray starting exactly there would immediately "hit" the very surface it started from, shadowing everything. Starting a hair away avoids that. (Graphics people call the speckled mess you get otherwise "shadow acne".)</p>
+<p>Real shadows have soft edges, because the sun isn't a point: it's a disc in the sky, and near a shadow's edge only part of it is hidden. There's a beautiful trick to fake this almost for free. While marching toward the light, the ray passes things at various distances. At each step, <code>h / t</code> is roughly <em>the angle by which the ray misses</em> the nearest object, as seen from the shaded point. If that near-miss angle is small compared with the sun's size, the sun is partly covered. So keep the smallest value of <code>k * h / t</code> along the way:</p>
+<script type="text/x-glsl-snippet">
+float softShadow(vec3 p, vec3 lightDir, float k) {    // bigger k = smaller sun = sharper shadows
+    float res = 1.0, t = 0.02;
+    for (int i = 0; i < 64; i++) {
+        float h = map(p + lightDir * t);
+        res = min(res, k * h / t);           // the closest near-miss so far, relative to distance
+        if (res < 0.001) break;              // fully blocked
+        t += clamp(h, 0.01, 0.25);           // small enough steps not to skip past near misses
+        if (t > 10.0) break;
+    }
+    return clamp(res, 0.0, 1.0);             // 0 = full shadow, 1 = fully lit, between = penumbra
+}
+</script>
+<p>This technique was popularized by Inigo Quilez. Here the same scene is drawn twice, with hard shadows on the left and soft ones on the right:</p>
+<script type="text/x-glsl" data-ex="shadows" data-title="Hard shadows (left) and soft shadows (right)">
+float map(vec3 p) {
+    float a = length(p - vec3(-0.9, 0.7, 0.0)) - 0.7;
+    float b = length(p - vec3(1.0, 0.5 + 0.3 * sin(iTime), 0.4)) - 0.5;
+    float pillar = length(p.xz - vec2(0.1, 1.2)) - 0.15;    // an infinitely tall cylinder...
+    pillar = max(pillar, p.y - 2.0);                         // ...cut off at y = 2
+    return min(min(min(a, b), pillar), p.y);                 // p.y: the ground at y = 0
+}
+
+vec3 calcNormal(vec3 p) {
+    vec2 e = vec2(0.001, 0.0);
+    return normalize(vec3(map(p + e.xyy) - map(p - e.xyy),
+                          map(p + e.yxy) - map(p - e.yxy),
+                          map(p + e.yyx) - map(p - e.yyx)));
+}
+
+float hardShadow(vec3 p, vec3 l) {
+    float t = 0.02;
+    for (int i = 0; i < 64; i++) {
+        float h = map(p + l * t);
+        if (h < 0.001) return 0.0;
+        t += h;
+        if (t > 10.0) break;
+    }
+    return 1.0;
+}
+
+float softShadow(vec3 p, vec3 l, float k) {
+    float res = 1.0, t = 0.02;
+    for (int i = 0; i < 64; i++) {
+        float h = map(p + l * t);
+        res = min(res, k * h / t);
+        if (res < 0.001) break;
+        t += clamp(h, 0.01, 0.25);
+        if (t > 10.0) break;
+    }
+    return clamp(res, 0.0, 1.0);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    bool soft = uv.x > 0.0;                                   // right half: soft shadows
+    float halfW = iResolution.x / iResolution.y;              // each half is this wide in uv units
+    uv.x += soft ? -0.5 * halfW : 0.5 * halfW;                // center each half: two views of one scene
+
+    vec3 ro = vec3(0.0, 2.2, -6.0);
+    vec3 rd = normalize(vec3(uv.x, uv.y - 0.35, 1.8));        // tilted down a little
+
+    float t = 0.0;
+    for (int i = 0; i < 120; i++) {
+        float d = map(ro + rd * t);
+        if (d < 0.001 || t > 30.0) break;
+        t += d;
+    }
+
+    vec3 col = vec3(0.6, 0.7, 0.85);                          // sky
+    if (t < 30.0) {
+        vec3 p = ro + rd * t;
+        vec3 n = calcNormal(p);
+        vec3 l = normalize(vec3(-0.8, 0.5, -0.2));            // toward a low sun, on the left
+        float sh = soft ? softShadow(p, l, 8.0) : hardShadow(p, l);
+        float diff = max(dot(n, l), 0.0) * sh;
+        col = vec3(0.8) * (diff * vec3(1.0, 0.9, 0.75) + (0.5 + 0.5 * n.y) * vec3(0.15, 0.2, 0.3));
+    }
+    if (abs(fragCoord.x - iResolution.x * 0.5) < 1.5) col = vec3(1.0, 0.6, 0.2);   // the divider
+    fragColor = vec4(pow(col, vec3(1.0 / 2.2)), 1.0);
+}
+</script>
+<p>Look at the pillar's shadow on the right: it's crisp near the base, where the pillar is close to the ground, and blurrier toward the tip, which is far from where its shadow lands. Real shadows do exactly this. Lower <code>k</code> to 2.0 for a hazy day, raise it to 32.0 for a tiny, harsh sun.</p>
+
+<h2 id="ao">Ambient occlusion: creases are darker</h2>
+<p>The ambient light from Chapter 13 is a stand-in for light arriving from the whole sky. But a point deep in a crease or a corner can only see a small patch of sky, so it should get less. That darkening is called <b>ambient occlusion</b> (AO).</p>
+<p>The distance function can estimate it. From a surface point, step out a little way along the normal. In open space the distance there equals how far you stepped: nothing is near. In a crease, other surfaces are close, so the distance is <em>less</em> than the step. The shortfall measures how enclosed the point is:</p>
+<script type="text/x-glsl-snippet">
+float occlusion(vec3 p, vec3 n) {
+    float occ = 0.0, w = 1.0;
+    for (int i = 1; i <= 5; i++) {
+        float h = 0.02 + 0.06 * float(i);       // probe 0.08 .. 0.32 out along the normal
+        occ += (h - map(p + n * h)) * w;        // open space: map = h, adds nothing
+        w *= 0.7;                               // nearer probes count more
+    }
+    return clamp(1.0 - 2.5 * occ, 0.0, 1.0);    // 1 = open, 0 = deep in a crease
+}
+</script>
+<script type="text/x-glsl" data-ex="ao-view" data-title="Ambient occlusion only: white where the surface sees the open sky">
+float smin(float a, float b, float k) {
+    float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+    return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+float sdBox(vec3 p, vec3 b) {
+    vec3 q = abs(p) - b;
+    return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0);
+}
+
+float map(vec3 p) {
+    float a = length(p - vec3(-0.6, 0.55, 0.0)) - 0.6;
+    float b = length(p - vec3(0.35, 0.4 + 0.15 * sin(iTime), -0.3)) - 0.45;
+    float blob = smin(a, b, 0.2);
+    float wall = sdBox(p - vec3(0.0, 1.0, 1.0), vec3(3.0, 1.0, 0.1));   // a wall behind
+    return min(min(blob, wall), p.y);
+}
+
+vec3 calcNormal(vec3 p) {
+    vec2 e = vec2(0.001, 0.0);
+    return normalize(vec3(map(p + e.xyy) - map(p - e.xyy),
+                          map(p + e.yxy) - map(p - e.yxy),
+                          map(p + e.yyx) - map(p - e.yyx)));
+}
+
+float occlusion(vec3 p, vec3 n) {
+    float occ = 0.0, w = 1.0;
+    for (int i = 1; i <= 5; i++) {
+        float h = 0.02 + 0.06 * float(i);
+        occ += (h - map(p + n * h)) * w;
+        w *= 0.7;
+    }
+    return clamp(1.0 - 2.5 * occ, 0.0, 1.0);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    vec3 ro = vec3(0.4, 1.4, -3.2);
+    vec3 rd = normalize(vec3(uv.x, uv.y - 0.3, 1.6));
+
+    float t = 0.0;
+    for (int i = 0; i < 120; i++) {
+        float d = map(ro + rd * t);
+        if (d < 0.001 || t > 20.0) break;
+        t += d;
+    }
+    vec3 col = vec3(0.9);
+    if (t < 20.0) {
+        vec3 p = ro + rd * t;
+        col = vec3(occlusion(p, calcNormal(p)));
+    }
+    fragColor = vec4(pow(col, vec3(1.0 / 2.2)), 1.0);
+}
+</script>
+<p>There's no light in this picture at all, only AO, and the scene already reads clearly: dark where the blobs meet each other, the floor and the wall, white on every open surface. Multiply the ambient light by this, and creases look like creases.</p>
+
+<h2 id="fog">Fog: the air between</h2>
+<p>Air isn't perfectly clear. Over a long distance it scatters light, so faraway things fade toward the color of the sky. Physically, every meter of air lets through the same <em>fraction</em> of light, say 99%. After two meters, 99% of 99%; after t meters, 0.99<sup>t</sup>. A quantity that shrinks by the same fraction per step is an exponential decay (Chapter 4), so:</p>
+<div class="formula">visible = exp(-density * t)                  // how much of the object's light gets through
+col = mix(col, skyColor, 1.0 - visible)       // the rest is replaced by the sky's color</div>
+<p>Shaders often use <code>exp(-density * t * t)</code> instead, which keeps nearby things perfectly clear and then fades faster. Fog does three jobs at once: depth (far looks far), mood (the fog's color sets the time of day) and hiding the place where the scene ends.</p>
+
+<h2 id="camera">A camera that can look anywhere</h2>
+<p>So far the camera has always looked straight down the z axis. To look at any point from anywhere, you need the camera's own three directions, expressed in world coordinates: <b>forward</b>, <b>right</b> and <b>up</b>. Chapter 7's cross product finds them:</p>
+<script type="text/x-glsl-snippet">
+vec3 forward = normalize(target - ro);                     // from the eye toward what it looks at
+vec3 right   = normalize(cross(vec3(0.0, 1.0, 0.0), forward));  // perpendicular to world-up and forward
+vec3 up      = cross(forward, right);                      // perpendicular to both: the camera's own up
+vec3 rd = normalize(uv.x * right + uv.y * up + 1.8 * forward);
+</script>
+<p>This is Chapter 9's rotation idea, one dimension up. In Chapter 13 the ray recipe was "uv.x steps right, uv.y steps up, f steps forward" with right = (1, 0, 0), up = (0, 1, 0) and forward = (0, 0, 1). Now the same recipe uses the camera's turned arrows. The cross product of world-up and forward is perpendicular to both, which is a horizontal arrow pointing to the camera's right, so the horizon stays level. (Looking straight up or down breaks it, since forward and world-up are then parallel and their cross product is zero.)</p>
+
+<h2 id="golden-hour">Everything together: golden hour</h2>
+<p>Here's a sculpture of melted spheres, lit by a low golden sun with soft shadows, sky light with ambient occlusion, and fog, seen through a camera that orbits it:</p>
+<script type="text/x-glsl" data-ex="mood" data-title="A sculpture at golden hour: shadows, AO, fog and an orbiting camera">
+float smin(float a, float b, float k) {
+    float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+    return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+float map(vec3 p) {
+    float a = length(p - vec3(0.0, 0.8, 0.0)) - 0.8;
+    float b = length(p - vec3(0.9 * sin(iTime * 0.7), 0.5 + 0.3 * sin(iTime * 1.3), 0.6 * cos(iTime * 0.7))) - 0.45;
+    float c = length(p - vec3(-1.1, 0.35, 0.4)) - 0.35;
+    float sculpture = smin(smin(a, b, 0.4), c, 0.3);
+    return min(sculpture, p.y);                         // p.y: the ground
+}
+
+vec3 calcNormal(vec3 p) {
+    vec2 e = vec2(0.001, 0.0);
+    return normalize(vec3(map(p + e.xyy) - map(p - e.xyy),
+                          map(p + e.yxy) - map(p - e.yxy),
+                          map(p + e.yyx) - map(p - e.yyx)));
+}
+
+float softShadow(vec3 p, vec3 l, float k) {
+    float res = 1.0, t = 0.02;
+    for (int i = 0; i < 48; i++) {
+        float h = map(p + l * t);
+        res = min(res, k * h / t);
+        if (res < 0.001) break;
+        t += clamp(h, 0.02, 0.25);
+        if (t > 8.0) break;
+    }
+    return clamp(res, 0.0, 1.0);
+}
+
+float occlusion(vec3 p, vec3 n) {
+    float occ = 0.0, w = 1.0;
+    for (int i = 1; i <= 5; i++) {
+        float h = 0.02 + 0.06 * float(i);
+        occ += (h - map(p + n * h)) * w;
+        w *= 0.7;
+    }
+    return clamp(1.0 - 2.5 * occ, 0.0, 1.0);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+
+    // a camera that orbits the sculpture and looks at it
+    float ang = iTime * 0.15;
+    vec3 ro = vec3(4.0 * sin(ang), 1.6, -4.0 * cos(ang));
+    vec3 target = vec3(0.0, 0.6, 0.0);
+    vec3 fw = normalize(target - ro);
+    vec3 rt = normalize(cross(vec3(0.0, 1.0, 0.0), fw));
+    vec3 up = cross(fw, rt);
+    vec3 rd = normalize(uv.x * rt + uv.y * up + 1.8 * fw);
+
+    float t = 0.0;
+    for (int i = 0; i < 120; i++) {
+        float d = map(ro + rd * t);
+        if (d < 0.001 || t > 30.0) break;
+        t += d;
+    }
+
+    vec3 sunDir = normalize(vec3(-0.6, 0.45, 0.5));    // a low, golden sun
+    vec3 sky = mix(vec3(1.0, 0.72, 0.48), vec3(0.32, 0.42, 0.68), clamp(rd.y * 2.0 + 0.3, 0.0, 1.0));
+    sky += vec3(1.0, 0.6, 0.3) * pow(max(dot(rd, sunDir), 0.0), 24.0);   // glow around the sun
+    vec3 col = sky;
+    if (t < 30.0) {
+        vec3 p = ro + rd * t;
+        vec3 n = calcNormal(p);
+        float sun = max(dot(n, sunDir), 0.0) * softShadow(p, sunDir, 8.0);
+        float skyLight = 0.5 + 0.5 * n.y;
+        float ao = occlusion(p, n);
+        vec3 albedo = p.y < 0.002 ? vec3(0.5, 0.46, 0.42) : vec3(0.85, 0.32, 0.22);
+        col = albedo * (vec3(1.7, 1.15, 0.75) * sun + vec3(0.22, 0.3, 0.45) * skyLight * ao);
+        col = mix(col, sky, 1.0 - exp(-0.004 * t * t));   // fog
+    }
+    fragColor = vec4(pow(col, vec3(1.0 / 2.2)), 1.0);
+}
+</script>
+<p>The sun light is a warm color brighter than 1.0 and the sky light is a dim blue: that contrast between warm direct light and cool shadow is most of what makes it feel like late afternoon. Try a high white sun, or a blue moon with a nearly black sky, by changing just those two colors and the sky gradient.</p>
+<aside class="aha"><p>Every effect in this chapter is another question asked of the same distance function: is anything between me and the sun, how close did the shadow ray come, how much space is around me? The scene is described once; lighting just keeps asking it things.</p></aside>
+
+<h2 id="infinite">Infinite worlds</h2>
+<p>Chapter 10 repeated 2D space with fract. The same works in 3D, and it costs nothing: the shader still evaluates one shape, but every cell of space asks about its own copy. <code>mod(p + 1.0, 2.0) - 1.0</code> gives each 2 × 2 × 2 cell its own coordinates from −1 to 1, centered in the cell:</p>
+<script type="text/x-glsl" data-ex="infinite" data-title="An endless lattice: one ball and one rod, repeated forever">
+float smin(float a, float b, float k) {
+    float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+    return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+float map(vec3 p) {
+    p.z += iTime;                          // move the world toward the camera: flying forward
+    vec3 q = mod(p + 1.0, 2.0) - 1.0;      // repeat space every 2 units (Chapter 10, in 3D)
+    float ball = length(q) - 0.35;
+    float rod = length(q.xy) - 0.06;       // a thin rod along z in every cell
+    return smin(ball, rod, 0.15);          // melt them together (Chapter 8)
+}
+
+vec3 calcNormal(vec3 p) {
+    vec2 e = vec2(0.001, 0.0);
+    return normalize(vec3(map(p + e.xyy) - map(p - e.xyy),
+                          map(p + e.yxy) - map(p - e.yxy),
+                          map(p + e.yyx) - map(p - e.yyx)));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    vec3 ro = vec3(1.0, 1.0, 0.0);         // between the rods
+    vec3 rd = normalize(vec3(uv, 1.2));
+
+    float t = 0.0;
+    for (int i = 0; i < 100; i++) {
+        float d = map(ro + rd * t);
+        if (d < 0.001 || t > 30.0) break;
+        t += d;
+    }
+
+    vec3 fog = vec3(0.06, 0.07, 0.12);
+    vec3 col = fog;
+    if (t < 30.0) {
+        vec3 p = ro + rd * t;
+        vec3 n = calcNormal(p);
+        float diff = max(dot(n, normalize(vec3(0.5, 0.8, -0.4))), 0.0);
+        vec3 base = 0.55 + 0.45 * cos(6.28318 * (t * 0.04 + vec3(0.0, 0.33, 0.67)));
+        col = base * (0.15 + 0.85 * diff);
+        col = mix(col, fog, 1.0 - exp(-0.012 * t * t));   // fog hides where it stops being drawn
+    }
+    fragColor = vec4(pow(col, vec3(1.0 / 2.2)), 1.0);
+}
+</script>
+<p>The color comes from the palette fed with the distance t, so the lattice shifts hue with depth. And fog does its third job: the march gives up at t = 30, and without fog you'd see a hard edge there.</p>
+
+<h2 id="deform">Bending space, and its price</h2>
+<p>Chapter 9 transformed coordinates before asking the shape. You can do that with transforms that vary from place to place. <b>Twisting</b> rotates each horizontal slice by an angle that depends on its height. <b>Displacement</b> adds a wiggle to the distance itself:</p>
+<script type="text/x-glsl" data-ex="twist" data-title="A twisted column and a displaced ball, with careful steps">
+mat2 rot(float a) {
+    float c = cos(a), s = sin(a);
+    return mat2(c, s, -s, c);
+}
+
+float sdBox(vec3 p, vec3 b) {
+    vec3 q = abs(p) - b;
+    return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0);
+}
+
+float map(vec3 p) {
+    vec3 q = p - vec3(-0.9, 0.0, 0.0);
+    q.xz = rot(q.y * 1.5 * sin(iTime * 0.5)) * q.xz;     // twist: each height turns by its own angle
+    float column = sdBox(q, vec3(0.4, 1.4, 0.4)) - 0.04;
+
+    vec3 s = p - vec3(0.9, 0.0, 0.0);
+    float ball = length(s) - 0.8;
+    ball += 0.06 * sin(s.x * 10.0 + iTime) * sin(s.y * 10.0) * sin(s.z * 10.0);   // displacement
+
+    return min(min(column, ball), p.y + 1.4);
+}
+
+vec3 calcNormal(vec3 p) {
+    vec2 e = vec2(0.001, 0.0);
+    return normalize(vec3(map(p + e.xyy) - map(p - e.xyy),
+                          map(p + e.yxy) - map(p - e.yxy),
+                          map(p + e.yyx) - map(p - e.yyx)));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float ang = 0.3 * sin(iTime * 0.2);
+    vec3 ro = vec3(4.5 * sin(ang), 1.2, -4.5 * cos(ang));
+    vec3 fw = normalize(vec3(0.0, -0.1, 0.0) - ro);
+    vec3 rt = normalize(cross(vec3(0.0, 1.0, 0.0), fw));
+    vec3 up = cross(fw, rt);
+    vec3 rd = normalize(uv.x * rt + uv.y * up + 1.8 * fw);
+
+    float t = 0.0;
+    for (int i = 0; i < 160; i++) {
+        float d = map(ro + rd * t);
+        if (d < 0.001 || t > 20.0) break;
+        t += d * 0.6;                      // the price of bending space: smaller, safer steps
+    }
+    vec3 col = vec3(0.12, 0.13, 0.17) + 0.1 * uv.y;
+    if (t < 20.0) {
+        vec3 p = ro + rd * t;
+        vec3 n = calcNormal(p);
+        vec3 l = normalize(vec3(0.5, 0.8, -0.6));
+        vec3 albedo = p.y < -1.39 ? vec3(0.3) : (p.x < 0.0 ? vec3(0.9, 0.6, 0.25) : vec3(0.3, 0.6, 0.9));
+        float spec = pow(max(dot(n, normalize(l - rd)), 0.0), 32.0);
+        col = albedo * (max(dot(n, l), 0.0) + 0.15 * (0.5 + 0.5 * n.y)) + 0.3 * spec;
+        col = pow(col, vec3(1.0 / 2.2));
+    }
+    fragColor = vec4(col, 1.0);
+}
+</script>
+<p>Both tricks break the distance promise. After twisting, two points that were close together may have been rotated by different amounts, so the returned "distance" can be larger than the real one, and a full step might jump right through a surface. The fix is to step only a fraction of the distance (<code>t += d * 0.6</code>), which costs more steps but stays safe. Change 0.6 to 1.0 and watch for torn surfaces when the twist is strong.</p>
+
+<h2 id="terrain">Mountains from noise</h2>
+<p>A landscape is a <b>heightfield</b>: for every spot (x, z) on the ground, a function says how high the land is there. Chapter 11's fBm makes a great height function. A point is above the land when its y is bigger than the height below it, so <code>p.y - terrain(p.xz)</code> works as a (rough) distance:</p>
+<script type="text/x-glsl" data-ex="terrain" data-title="A heightfield made of fBm, with grass, rock and snow">
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float noise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
+               mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+
+float terrain(vec2 xz) {
+    vec2 p = xz * 0.25;
+    float sum = 0.0, amp = 0.5;
+    for (int i = 0; i < 6; i++) {
+        sum += amp * noise(p);
+        p = mat2(1.6, 1.2, -1.2, 1.6) * p;  // double the detail and turn a little, so octaves don't line up
+        amp *= 0.5;
+    }
+    return sum * 4.0 - 1.0;                 // heights from about -1 to 3
+}
+
+float map(vec3 p) {
+    return p.y - terrain(p.xz);             // positive above the ground
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+
+    vec3 ro = vec3(0.0, 0.0, iTime * 1.5);                    // fly forward
+    ro.y = max(terrain(ro.xz), 0.4) + 1.6;                    // stay above the ground
+    vec3 rd = normalize(vec3(uv.x, uv.y - 0.25, 1.5));
+
+    float t = 0.0;
+    for (int i = 0; i < 160; i++) {
+        float h = map(ro + rd * t);
+        if (h < 0.002 * t || t > 60.0) break;  // "close enough" grows with distance
+        t += h * 0.5;                          // half steps: height isn't a true distance
+    }
+
+    vec3 sunDir = normalize(vec3(0.8, 0.45, 0.6));
+    vec3 sky = mix(vec3(0.85, 0.75, 0.65), vec3(0.35, 0.5, 0.75), clamp(rd.y * 3.0, 0.0, 1.0));
+    vec3 col = sky;
+    if (t < 60.0) {
+        vec3 p = ro + rd * t;
+        vec2 e = vec2(0.02, 0.0);
+        vec3 n = normalize(vec3(terrain(p.xz - e.xy) - terrain(p.xz + e.xy), 2.0 * e.x,
+                                terrain(p.xz - e.yx) - terrain(p.xz + e.yx)));
+        vec3 rock = vec3(0.36, 0.31, 0.27), grass = vec3(0.24, 0.36, 0.14), snow = vec3(0.95);
+        vec3 albedo = mix(rock, grass, smoothstep(0.75, 0.9, n.y));      // flat = grass, steep = rock
+        albedo = mix(albedo, snow, smoothstep(1.6, 2.0, p.y + 0.3 * n.y) * smoothstep(0.55, 0.8, n.y));
+        float diff = max(dot(n, sunDir), 0.0);
+        col = albedo * (vec3(1.6, 1.3, 1.0) * diff + vec3(0.2, 0.26, 0.36));
+        col = mix(col, sky, 1.0 - exp(-0.0012 * t * t));                // haze
+    }
+    fragColor = vec4(pow(col, vec3(1.0 / 2.2)), 1.0);
+}
+</script>
+<p>Three details worth noticing:</p>
+<ul>
+<li><b>Half steps.</b> The height difference straight down isn't the true distance: on a steep slope the nearest rock might be off to the side and much closer. Stepping half the height keeps the ray safe.</li>
+<li><b>Relative precision.</b> <code>h &lt; 0.002 * t</code> accepts a hit sooner the farther away it is. A faraway mountain is only a pixel or two on screen, so there's no point marching to perfect precision.</li>
+<li><b>Materials from geometry.</b> The normal's y says how flat the ground is (1 = flat), so flat areas get grass and steep ones rock. Height adds snow, but only where it's flat enough for snow to settle.</li>
+</ul>
+
+<section class="summary">
+<h2>What you now know</h2>
+<ul>
+<li>Shadows: march from the surface toward the light; start a little off the surface.</li>
+<li>Soft shadows: keep the smallest <code>k * h / t</code>, the closest near-miss relative to distance.</li>
+<li>Ambient occlusion: probe along the normal; if the distance is less than the step, the point is enclosed.</li>
+<li>Fog is exponential decay: <code>mix(col, sky, 1.0 - exp(-density * t * t))</code>.</li>
+<li>A look-at camera builds forward, right and up with cross products, then follows the same ray recipe.</li>
+<li><code>mod(p + c, 2c) - c</code> repeats 3D space for free. Twists and displacements need smaller steps.</li>
+<li>Terrain: <code>p.y - height(p.xz)</code>, half steps, precision relative to distance, materials from the normal.</li>
+</ul>
+</section>
+
+<div class="try" title="Exercises">
+<p><b>1.</b> Turn <code>mood</code> into a night scene: a pale blue moon instead of the sun, a dark sky, and a warm point of light near the sculpture. (Hint: for a point light at <code>lp</code>, the light direction is <code>normalize(lp - p)</code>, and its brightness falls off with distance, for example <code>1.0 / dot(lp - p, lp - p)</code>.)</p>
+<p><b>2.</b> In <code>infinite</code>, twist the whole world slowly around the z axis as you fly, by rotating <code>p.xy</code> by an angle that depends on <code>p.z</code>. Remember to take smaller steps.</p>
+<p><b>3.</b> Give <code>terrain</code> a lake: everything below a certain height becomes flat water.</p>
+<details><summary>Hint</summary><div><script type="text/x-glsl-snippet">
+float map(vec3 p) { return min(p.y - terrain(p.xz), p.y - 0.2); }   // a water plane at y = 0.2
+// and in the coloring:
+if (p.y < 0.21) albedo = vec3(0.1, 0.25, 0.35);
+</script></div></details>
+<p><b>4.</b> Add soft shadows to <code>terrain</code>. Mountains casting shadows on each other at sunset is worth the extra steps.</p>
+</div>
+<p><b>Go deeper:</b> Inigo Quilez on <a href="https://iquilezles.org/articles/rmshadows/" target="_blank" rel="noopener">soft shadows</a>, <a href="https://iquilezles.org/articles/fog/" target="_blank" rel="noopener">fog</a> and <a href="https://iquilezles.org/articles/terrainmarching/" target="_blank" rel="noopener">terrain marching</a>, and his video <a href="https://www.youtube.com/watch?v=BFld4EBO2RE" target="_blank" rel="noopener">I painted a Landscape with Mathematics</a>, which builds a whole landscape step by step.</p>

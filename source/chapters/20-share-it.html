@@ -1,0 +1,171 @@
+<!--meta
+{"num": 20, "slug": "share-it", "part": 4, "title": "Share it, and where to go next", "summary": "Shadertoy step by step, how the p5.js bridge works, shaders as filters over your drawings, Genuary, the shader community, your toolkit and paths onward.", "hero": "toolkit", "start": "toolkit"}
+-->
+<p class="lede">Everything you make in a shader lives in a few dozen lines of text, which makes it easy to share and easy to carry into other tools. This last chapter covers getting your work onto Shadertoy and into p5.js, finding the people who'll enjoy it, and the toolkit you'll start every new piece from.</p>
+
+<h2 id="shadertoy">Shadertoy</h2>
+<p><a href="https://www.shadertoy.com/" target="_blank" rel="noopener">Shadertoy</a> is where shader people publish, comment and learn from each other's code, and every example in this course follows its conventions, so your code runs there unchanged. To publish:</p>
+<ol>
+<li>Make a free account and open <a href="https://www.shadertoy.com/new" target="_blank" rel="noopener">shadertoy.com/new</a>.</li>
+<li>In the workbench here, choose <b>Export → Copy for Shadertoy</b>, then select everything in Shadertoy's editor and paste over it. Press the play button under the editor (or Alt + Enter) to compile.</li>
+<li>Give it a name, tags (like <i>2d</i>, <i>sdf</i>, <i>noise</i>, <i>raymarching</i>) and a one-line description, then save it as public or unlisted.</li>
+</ol>
+<p>Pieces with a <b>buffer</b> (Chapter 15) need their channels wired up by hand, because Shadertoy lets each pass read from anything. The copied text includes these instructions as comments:</p>
+<ul>
+<li>Click the <b>+</b> tab next to "Image" and choose <b>Buffer A</b>. Paste the Buffer A code there.</li>
+<li>Below Buffer A's editor, click <b>iChannel0</b> and choose Buffer A itself, so it reads its own last frame.</li>
+<li>In the Image tab, set <b>iChannel0</b> to Buffer A.</li>
+<li>The small gear on a channel sets <b>filtering</b> (nearest or linear) and <b>wrapping</b>. Shadertoy buffers always run at full resolution, so the Game of Life's cells will be single pixels there unless you scale <code>fragCoord</code> yourself.</li>
+</ul>
+<p>For <b>sound</b> (Chapter 16), click a channel and pick a track from the Music tab, the microphone or SoundCloud. The texture has the same 512 × 2 layout as here. In a pass with a buffer, put the sound on iChannel1 to match this course's code.</p>
+<p>Shadertoy is also the world's biggest shader library. Open any shader, read its code with this course's eyes, change numbers and recompile to see what happens: your edits stay on your screen unless you save them. Reading other people's code is how most shader programmers learned.</p>
+
+<h2 id="p5">Into p5.js</h2>
+<p><b>Export → Copy as p5.js sketch</b> wraps a single-pass shader into a complete sketch for the <a href="https://editor.p5js.org/" target="_blank" rel="noopener">p5.js web editor</a>. Paste it in and press play. Here's what the generated sketch does, and why, so you can adapt it:</p>
+<ul>
+<li>It uses <code>createFilterShader()</code> in WEBGL mode. A <b>filter shader</b> runs over the whole canvas after you've drawn, like Photoshop's filters, and receives what p5 drew as a texture called <code>tex0</code>. The sketch renames it to <code>iChannel0</code>.</li>
+<li>p5 provides <code>vTexCoord</code> (0..1 across the canvas) and <code>canvasSize</code> instead of fragCoord and iResolution, so the sketch computes them: <code>fragCoord = texture coordinate × canvas size</code>.</li>
+<li>p5's coordinates run top to bottom, Shadertoy's bottom to top, so the sketch flips y in both fragCoord and texture reads (otherwise everything is upside down).</li>
+<li>p5 finds the shader's entry point by looking for "main", and gets confused by a function called <code>mainImage</code>, so the sketch renames it.</li>
+<li>Every frame, <code>draw()</code> sets the uniforms with <code>setUniform</code>: time from <code>millis()</code>, the mouse with y flipped, and so on. That's Chapter 18's frame loop, in p5's words.</li>
+</ul>
+<p>The interesting part is the filter. Anything you draw in p5 before <code>filter(fx)</code> reaches the shader, which means a shader can be a lens over your old sketches: particles, flocking, text. A filter is just a shader that reads the picture at coordinates you've bent. This example stands in a function called <code>drawing</code> for what p5 would draw:</p>
+<script type="text/x-glsl" data-ex="p5-filter" data-title="A filter: reading a drawing at bent coordinates">
+// Stand-in for what p5 draws. In the p5 sketch, replace drawing(bent)
+// with texture(iChannel0, bent).rgb and draw anything you like in draw().
+vec3 drawing(vec2 uv) {
+    float aspect = iResolution.x / iResolution.y;
+    vec3 col = vec3(0.95, 0.93, 0.88);                         // paper
+    for (int i = 0; i < 5; i++) {
+        float fi = float(i);
+        vec2 c = 0.5 + 0.3 * vec2(sin(iTime * 0.6 + fi * 1.7), cos(iTime * 0.5 + fi * 2.3));
+        float r = 0.08 + 0.03 * sin(fi * 3.1);
+        vec3 ink = 0.5 + 0.5 * cos(6.28318 * (fi * 0.17 + vec3(0.0, 0.33, 0.67)));
+        float d = length((uv - c) * vec2(aspect, 1.0)) - r;
+        col = mix(col, ink, 1.0 - smoothstep(0.0, 0.006, d));
+    }
+    return col;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;                      // 0..1, like texture coordinates
+    vec2 c = (uv - 0.5) * vec2(iResolution.x / iResolution.y, 1.0);
+    float r = length(c);
+
+    // ripples spreading from the center push each lookup in or out a little
+    float push = 0.015 * sin(r * 40.0 - iTime * 4.0) * exp(-r * 2.0);
+    vec2 bent = uv + (c / max(r, 1e-4)) * push / vec2(iResolution.x / iResolution.y, 1.0);
+
+    vec3 col = drawing(bent);
+    // vec3 col = drawing(uv);                                 // compare: the plain drawing
+    fragColor = vec4(col, 1.0);
+}
+</script>
+<p>Swap the ripple for any coordinate bending from this course: Chapter 10's kaleidoscope, Chapter 11's noise warp, Chapter 9's rotation. The drawing never changes; only where each pixel looks does. (p5.js 2.0 also introduced p5.strands, a way to write shaders in JavaScript itself, which is worth a look once you're comfortable.)</p>
+
+<h2 id="genuary">Genuary</h2>
+<p><a href="https://genuary.art/" target="_blank" rel="noopener">Genuary</a> is a yearly event where thousands of people make generative art every day in January, one prompt per day, and post it with the #genuary tag. Prompts are things like "a grid", "one color", "make something that loops", "use noise". Every one of them can be answered with what you know now.</p>
+<p>You don't need to do all 31. Pick the prompts that excite you, start each from your toolkit (below), and post them. The prompts appear on genuary.art in time for January, and every past year's prompts are archived there too, so you can warm up anytime with a past year's list.</p>
+
+<h2 id="community">Where the shader people are</h2>
+<ul>
+<li><b>Shadertoy</b>: comments under shaders are often generous with tips.</li>
+<li><b>Social media</b>: tags like #shader, #glsl, #creativecoding and #generativeart on Mastodon, Bluesky, Instagram and X, plus #genuary in January.</li>
+<li><b>twigl</b> (<a href="https://twigl.app/" target="_blank" rel="noopener">twigl.app</a>): a playground for tiny shaders that fit in a social media post, home of the #つぶやきGLSL ("tweet GLSL") code-golf tradition.</li>
+<li><b>The demoscene</b>: a decades-old community making real-time art with code. Demoparties like Revision host live "shader showdowns", where coders battle on stage, writing shaders from scratch in 25 minutes.</li>
+<li><b>Video</b>: Inigo Quilez, The Art of Code (Martijn Steinrucken) and kishimisu all build shaders live on YouTube, explaining as they go. You'll follow nearly everything now.</li>
+</ul>
+
+<h2 id="toolkit">Your toolkit</h2>
+<p>Here are the most useful functions from the course in one place, with a small starter piece at the bottom. It's what the Playground opens with. Start every new piece from it: copy it, keep the helpers you need, delete the rest, and replace the starter with your idea.</p>
+<script type="text/x-glsl" data-ex="toolkit" data-title="Your toolkit: the course's helpers and a starter piece">
+// Your toolkit: the course in one file. Delete what you don't use.
+
+mat2 rot(float a) {                                  // Chapter 9: rot(a) * p turns p by a
+    float c = cos(a), s = sin(a);
+    return mat2(c, s, -s, c);
+}
+
+vec3 palette(float t) {                              // Chapter 6: put your favorite a, b, c, d here
+    vec3 a = vec3(0.5), b = vec3(0.5), c = vec3(1.0);
+    vec3 d = vec3(0.263, 0.416, 0.557);
+    return a + b * cos(6.28318 * (c * t + d));
+}
+
+float hash(vec2 p) {                                 // Chapter 11: a random number per input
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float noise(vec2 p) {                                // Chapter 11: smooth value noise
+    vec2 i = floor(p), f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
+               mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+
+float fbm(vec2 p) {                                  // Chapter 11: octaves of noise
+    float sum = 0.0, amp = 0.5;
+    for (int i = 0; i < 5; i++) {
+        sum += amp * noise(p);
+        p = rot(0.5) * p * 2.0;                      // turn each octave so they don't line up
+        amp *= 0.5;
+    }
+    return sum;
+}
+
+float sdBox(vec2 p, vec2 b) {                        // Chapter 8: box distance
+    vec2 q = abs(p) - b;
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
+}
+
+float smin(float a, float b, float k) {              // Chapter 8: melt two shapes together
+    float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+    return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;   // Chapter 3
+    float px = 2.0 / iResolution.y;                                 // one pixel, for smooth edges
+
+    // ── start here ──
+    vec2 p = rot(iTime * 0.05) * uv;
+    float n = fbm(p * 2.0 + fbm(p * 2.0 + iTime * 0.1));    // a quick domain warp (Chapter 11)
+    float d = sdBox(p, vec2(0.6));
+    vec3 col = palette(n + iTime * 0.05) * (0.25 + n);
+    col += vec3(1.0, 0.8, 0.6) * 0.006 / abs(d);            // a neon frame (Chapter 8)
+
+    col = 1.0 - exp(-col);                                  // tone map (Chapter 6)
+    fragColor = vec4(col, 1.0);
+}
+</script>
+<p>Look at the starter piece and try naming where each line comes from: centered coordinates, rotation, a warped fBm, a box distance, a palette, a neon glow and tone mapping. If you can read a shader by recognizing its parts, you're fluent.</p>
+
+<h2 id="next">Where to go next</h2>
+<p>You've covered the ground most shader programmers stand on. Depending on what pulled you in, here are directions to go deeper:</p>
+<ul>
+<li><b>Deeper 3D</b>: Inigo Quilez's <a href="https://iquilezles.org/articles/" target="_blank" rel="noopener">articles</a> go much further on distance functions, lighting and terrain. After that, physically based rendering and path tracing (<a href="https://learnopengl.com/" target="_blank" rel="noopener">LearnOpenGL</a> covers the lighting side).</li>
+<li><b>Generative art</b>: The Book of Shaders, read cover to cover now, will feel like review with new tricks. Then study artists' processes, for example Tyler Hobbs' <a href="https://www.tylerxhobbs.com/essays" target="_blank" rel="noopener">essays</a> on generative art.</li>
+<li><b>Simulations</b>: real fluid simulation (the GPU Gems chapter from Chapter 15), particles stored in textures, and eventually <b>compute shaders</b>.</li>
+<li><b>WebGPU</b>: the successor to WebGL, now available in major browsers. Its shading language, WGSL, looks different but works on the same ideas, and it adds compute shaders, which can do general work beyond coloring pixels.</li>
+<li><b>Live visuals</b>: <a href="https://hydra.ojack.xyz/" target="_blank" rel="noopener">Hydra</a> for live-coded visuals in the browser, and tools like KodeLife or TouchDesigner for performing with shaders on stage.</li>
+</ul>
+<aside class="aha"><p>A pixel asking a question, answered with a little math: that's the whole idea, from Chapter 1's gradient to a mountain range at sunset. Everything else was learning to ask better questions.</p></aside>
+
+<section class="summary">
+<h2>What you now know</h2>
+<ul>
+<li>Shadertoy runs this course's code unchanged; buffers and sound need their channels wired by hand.</li>
+<li>The p5.js export runs your shader as a filter: tex0 is the canvas, coordinates are flipped, mainImage is renamed, uniforms are set each frame.</li>
+<li>A filter is a shader that reads a picture at bent coordinates.</li>
+<li>Genuary, Shadertoy, twigl and the demoscene are where shader people share.</li>
+<li>Your toolkit holds the course's most useful helpers; start every piece from it.</li>
+</ul>
+</section>
+
+<div class="try" title="Last exercises">
+<p><b>1.</b> Publish one piece on Shadertoy with a title and a description.</p>
+<p><b>2.</b> Export <code>p5-filter</code> as a p5.js sketch, swap <code>drawing(bent)</code> for <code>texture(iChannel0, bent).rgb</code>, and draw something of your own in <code>draw()</code>.</p>
+<p><b>3.</b> Pick five prompts from a Genuary list and make them, starting each from the toolkit.</p>
+<p><b>4.</b> Write a shader from an empty <code>mainImage</code>, without copying, using only what you remember and the reference page. It doesn't have to be big. It has to be yours.</p>
+</div>
+<p><b>Go deeper:</b> <a href="https://www.shadertoy.com/" target="_blank" rel="noopener">Shadertoy</a>, <a href="https://p5js.org/reference/p5/createFilterShader/" target="_blank" rel="noopener">p5.js createFilterShader()</a>, <a href="https://genuary.art/" target="_blank" rel="noopener">Genuary</a>, and <a href="https://thebookofshaders.com/" target="_blank" rel="noopener">The Book of Shaders</a>.</p>

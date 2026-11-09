@@ -1,0 +1,557 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>8. Shapes from distance · Shader Fragments</title>
+<meta name="description" content="Signed distance functions: smooth edges, outlines and glows, a box and a segment derived from scratch, and shapes that melt together.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="../assets/icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+
+</head>
+<body data-page="chapter" data-root="..">
+<header class="top"><div class="top-in">
+  <a class="logo" href="../index.html"><span class="logo-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="word">Shader Fragments</span></a>
+  <nav class="nav" aria-label="Main"><a href="../index.html#contents">Contents</a><a href="../reference.html">Reference</a><a href="../playground.html">Playground</a></nav>
+</div></header>
+<main>
+<div class="wrap"><div class="chapter">
+<header class="ch-head">
+  <p class="eyebrow"><b>Part I · Foundations</b> · Chapter 8</p>
+  <h1>Shapes from distance</h1>
+  <p class="lede">So far, every shape has been a yes-or-no question: is this pixel inside? This chapter asks a better question: <em>how far is this pixel from the edge?</em> That single number gives you smooth edges, outlines, glows and rounded corners for free, lets shapes melt into each other like clay, and is exactly how the 3D worlds in Part II are built.</p>
+  <details class="ch-toc" open><summary>In this chapter</summary><ol><li><a href="#jaggies">The problem with yes or no</a></li><li><a href="#signed">Signed distance</a></li><li><a href="#free">What a distance gives you for free</a></li><li><a href="#box">A box, derived from scratch</a></li><li><a href="#segment">A line segment, by projection</a></li><li><a href="#combine">Combining shapes: min, max and minus</a></li><li><a href="#smooth">Melting shapes together: smooth minimum</a></li><li><a href="#fwidth">When you don't know how big a pixel is</a></li></ol></details>
+</header>
+<aside class="stage" id="workbench" data-start="aa" aria-label="Workbench: live shader and code"></aside>
+<article class="ch-body">
+
+
+
+<h2 id="jaggies"><span class="sec-n">8.1</span>The problem with yes or no</h2>
+<p>A pixel isn't a point. It's a small square, and a shape's edge usually cuts through some pixels partway. But a yes/no test only checks each pixel's center, so a pixel is either fully colored or not at all. Along a curved or slanted edge, that produces a staircase called <b>aliasing</b> (or "the jaggies").</p>
+<p>On a high-resolution screen the steps are tiny, so this example magnifies them: it treats every 10 × 10 block of real pixels as one big pixel. The left circle uses yes/no. The right one uses distance to estimate how much of each pixel the shape covers:</p>
+<figure class="ex" id="ex-aa" data-ex="aa" data-label="Example 8.1" data-title="Magnified pixels: yes/no edge (left), coverage from distance (right)" data-cfg='{}'><figcaption><span class="ex-n">Example 8.1</span><span>Magnified pixels: yes/no edge (left), coverage from distance (right)</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    float B = 10.0;                                       // big-pixel size, in real pixels
+    vec2 center = floor(fragCoord / B) * B + B * 0.5;     // the center of this big pixel
+    vec2 uv = (center * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 * B / iResolution.y;                   // one big pixel, in uv units
+
+    vec2 c = vec2(uv.x &lt; 0.0 ? -0.85 : 0.85, 0.0);        // one circle in each half
+    float d = length(uv - c) - 0.6;                       // how far outside the edge (negative = inside)
+
+    float fill;
+    if (uv.x &lt; 0.0) fill = d &lt; 0.0 ? 1.0 : 0.0;           // left: inside or not
+    else            fill = clamp(0.5 - d / px, 0.0, 1.0); // right: the covered fraction
+
+    vec3 col = mix(vec3(0.08, 0.09, 0.12), vec3(1.0, 0.6, 0.2), fill);
+    vec2 g = mod(fragCoord, B);
+    if (min(g.x, g.y) &lt; 1.0) col *= 0.7;                  // thin lines between big pixels
+
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    float B = 10.0;                                       // big-pixel size, in real pixels
+    vec2 center = floor(fragCoord / B) * B + B * 0.5;     // the center of this big pixel
+    vec2 uv = (center * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 * B / iResolution.y;                   // one big pixel, in uv units
+
+    vec2 c = vec2(uv.x < 0.0 ? -0.85 : 0.85, 0.0);        // one circle in each half
+    float d = length(uv - c) - 0.6;                       // how far outside the edge (negative = inside)
+
+    float fill;
+    if (uv.x < 0.0) fill = d < 0.0 ? 1.0 : 0.0;           // left: inside or not
+    else            fill = clamp(0.5 - d / px, 0.0, 1.0); // right: the covered fraction
+
+    vec3 col = mix(vec3(0.08, 0.09, 0.12), vec3(1.0, 0.6, 0.2), fill);
+    vec2 g = mod(fragCoord, B);
+    if (min(g.x, g.y) < 1.0) col *= 0.7;                  // thin lines between big pixels
+
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<p>Here's the reasoning behind the right-hand formula. Zoomed in to the size of one pixel, any smooth edge looks like a straight line. If the edge passes exactly through the pixel's center (d = 0), about half the pixel is covered. If the center is half a pixel inside (d = −px/2), the whole pixel is covered; half a pixel outside, none of it. In between, coverage changes in a straight line with d. That's <code>clamp(0.5 - d / px, 0.0, 1.0)</code>: <em>distance, measured in pixels, turned into coverage</em>. This is <b>anti-aliasing</b>, and it needs a distance, which a yes/no test can't give you.</p>
+<p>Most shader code writes the same idea with smoothstep, fading over a couple of pixels with a gentle curve. This course uses that form from now on:</p>
+<pre class="snip"><code>float px = 2.0 / iResolution.y;              // the size of one pixel in uv units
+float fill = 1.0 - smoothstep(-px, px, d);   // 1 inside, 0 outside, smooth across the edge</code></pre>
+
+<h2 id="signed"><span class="sec-n">8.2</span>Signed distance</h2>
+<p>The <code>d</code> above has a sign that carries information:</p>
+<ul>
+<li><b>positive</b> outside the shape: how far you'd have to travel to reach it,</li>
+<li><b>zero</b> exactly on the edge,</li>
+<li><b>negative</b> inside: how deep you are, that is, how far to the nearest way out.</li>
+</ul>
+<p>A function that returns this for every point is a <b>signed distance function</b>, or <b>SDF</b>. For a circle of radius r centered at the origin, it's the distance to the center minus the radius:</p>
+<pre class="snip"><code>float sdCircle(vec2 p, float r) {
+    return length(p) - r;
+}</code></pre>
+<p>An SDF doesn't only describe the edge. It gives a number for every point on the canvas, called a <b>distance field</b>. Coloring the field directly shows it: here, orange is outside, blue is inside, each band is 0.05 units of distance, and the white line is where the distance is zero:</p>
+<figure class="ex" id="ex-field" data-ex="field" data-label="Example 8.2" data-title="The distance field of a circle" data-cfg='{}'><figcaption><span class="ex-n">Example 8.2</span><span>The distance field of a circle</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>// Color a signed distance: orange outside, blue inside, a band every 0.05, white edge.
+vec3 field(float d, float px) {
+    vec3 col = d &gt; 0.0 ? vec3(0.95, 0.6, 0.3) : vec3(0.4, 0.65, 1.0);
+    col *= 1.0 - exp(-4.0 * abs(d));             // darker close to the edge
+    col *= 0.8 + 0.2 * cos(125.66 * d);          // bands: cos repeats every 0.05
+    return mix(col, vec3(1.0), 1.0 - smoothstep(0.0, 1.5 * px, abs(d)));   // the edge
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    float d = length(uv) - 0.5;                  // a circle of radius 0.5
+    fragColor = vec4(field(d, px), 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+// Color a signed distance: orange outside, blue inside, a band every 0.05, white edge.
+vec3 field(float d, float px) {
+    vec3 col = d > 0.0 ? vec3(0.95, 0.6, 0.3) : vec3(0.4, 0.65, 1.0);
+    col *= 1.0 - exp(-4.0 * abs(d));             // darker close to the edge
+    col *= 0.8 + 0.2 * cos(125.66 * d);          // bands: cos repeats every 0.05
+    return mix(col, vec3(1.0), 1.0 - smoothstep(0.0, 1.5 * px, abs(d)));   // the edge
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    float d = length(uv) - 0.5;                  // a circle of radius 0.5
+    fragColor = vec4(field(d, px), 1.0);
+}
+</script></figure>
+<p>Each band is one more step of 0.05 away from the edge, so you can read distances by counting bands. Notice that the field exists everywhere, even far from the circle: every pixel knows exactly how far it is from the edge.</p>
+
+<h2 id="free"><span class="sec-n">8.3</span>What a distance gives you for free</h2>
+<p>With a distance in hand, many effects are one line each. All four panels below use the same circle SDF:</p>
+<figure class="ex" id="ex-effects" data-ex="effects" data-label="Example 8.3" data-title="One distance, four looks: fill, outline, glow, ripples" data-cfg='{}'><figcaption><span class="ex-n">Example 8.3</span><span>One distance, four looks: fill, outline, glow, ripples</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    // split into 2 x 2 panels, each with its own centered coordinates
+    vec2 size = iResolution.xy * 0.5;
+    vec2 cell = floor(fragCoord / size);               // (0,0) bottom-left .. (1,1) top-right
+    vec2 local = fragCoord - cell * size;
+    vec2 p = (local * 2.0 - size) / size.y;
+    float px = 2.0 / size.y;
+
+    float d = length(p) - 0.55;                        // the circle's signed distance
+    vec3 amber = vec3(1.0, 0.6, 0.2);
+    vec3 col = vec3(0.07, 0.08, 0.1);
+
+    if (cell == vec2(0.0, 1.0))                        // top-left: filled, smooth edge
+        col = mix(col, amber, 1.0 - smoothstep(-px, px, d));
+    if (cell == vec2(1.0, 1.0))                        // top-right: outline, |d| &lt; thickness
+        col = mix(col, amber, 1.0 - smoothstep(-px, px, abs(d) - 0.03));
+    if (cell == vec2(0.0, 0.0))                        // bottom-left: glow, bright near d = 0
+        col += amber * 0.02 / max(abs(d), 0.002);
+    if (cell == vec2(1.0, 0.0)) {                      // bottom-right: ripples moving outward
+        float r = abs(fract(d * 6.0 - iTime) - 0.5) / 6.0;   // distance to the nearest ripple
+        col = mix(col, amber, (1.0 - smoothstep(-px, px, r - 0.012)) * exp(-2.0 * max(d, 0.0)));
+    }
+    if (min(local.x, local.y) &lt; 1.5) col = vec3(0.3);  // panel borders
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    // split into 2 x 2 panels, each with its own centered coordinates
+    vec2 size = iResolution.xy * 0.5;
+    vec2 cell = floor(fragCoord / size);               // (0,0) bottom-left .. (1,1) top-right
+    vec2 local = fragCoord - cell * size;
+    vec2 p = (local * 2.0 - size) / size.y;
+    float px = 2.0 / size.y;
+
+    float d = length(p) - 0.55;                        // the circle's signed distance
+    vec3 amber = vec3(1.0, 0.6, 0.2);
+    vec3 col = vec3(0.07, 0.08, 0.1);
+
+    if (cell == vec2(0.0, 1.0))                        // top-left: filled, smooth edge
+        col = mix(col, amber, 1.0 - smoothstep(-px, px, d));
+    if (cell == vec2(1.0, 1.0))                        // top-right: outline, |d| < thickness
+        col = mix(col, amber, 1.0 - smoothstep(-px, px, abs(d) - 0.03));
+    if (cell == vec2(0.0, 0.0))                        // bottom-left: glow, bright near d = 0
+        col += amber * 0.02 / max(abs(d), 0.002);
+    if (cell == vec2(1.0, 0.0)) {                      // bottom-right: ripples moving outward
+        float r = abs(fract(d * 6.0 - iTime) - 0.5) / 6.0;   // distance to the nearest ripple
+        col = mix(col, amber, (1.0 - smoothstep(-px, px, r - 0.012)) * exp(-2.0 * max(d, 0.0)));
+    }
+    if (min(local.x, local.y) < 1.5) col = vec3(0.3);  // panel borders
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<ul>
+<li><b>Fill</b>: <code>d &lt; 0</code>, with a smooth edge.</li>
+<li><b>Outline</b>: <code>abs(d)</code> is the unsigned distance to the edge, so <code>abs(d) - t &lt; 0</code> is a band of thickness 2t centered on the edge. It works for any shape.</li>
+<li><b>Glow</b>: <code>k / abs(d)</code> is huge near the edge and fades with distance, like light spreading from a neon tube. Add it on top (light adds, Chapter 6).</li>
+<li><b>Ripples</b>: <code>fract(d * n)</code> repeats along the distance, so the copies follow the shape's outline. Subtracting time makes them travel.</li>
+</ul>
+<p>Two more one-liners worth remembering. <code>d - r</code> grows a shape outward by r, rounding its corners as it goes (you'll see it on the box below). And <code>abs(d) - t</code> turns any shape into a hollow shell of thickness 2t, sometimes called "onion" because you can repeat it for layers.</p>
+
+<h2 id="box"><span class="sec-n">8.4</span>A box, derived from scratch</h2>
+<p>Circles are easy because every edge point is the same distance from the center. A rectangle has flat sides and sharp corners, so the nearest edge point depends on where you are. Let's build its SDF step by step, for a box centered at the origin with half-width b.x and half-height b.y.</p>
+<p><b>Step 1: fold.</b> The box is symmetrical, so the answer for (−3, 2) is the same as for (3, 2). <code>abs(p)</code> folds all four quarters onto the top-right one (the mirror trick from Chapter 4), and now there's only one corner to think about.</p>
+<p><b>Step 2: measure past the edges.</b> <code>q = abs(p) - b</code>. q.x is how far you are to the right of the right edge's line (negative if you're to its left), and q.y is how far above the top edge's line.</p>
+<p><b>Step 3: look at the regions.</b></p>
+<figure class="diagram">
+<svg viewBox="0 0 540 250" role="img" aria-label="The top-right quarter of a box, split into four regions: inside, to the right, above, and the corner region, each with its nearest-point arrow.">
+  <g font-family="ui-monospace, monospace" font-size="13">
+    <rect x="60" y="120" width="200" height="100" fill="#4fb3c8" fill-opacity=".22"/>
+    <rect x="260" y="120" width="250" height="100" fill="#f2a33a" fill-opacity=".12"/>
+    <rect x="60" y="12" width="200" height="108" fill="#f2a33a" fill-opacity=".12"/>
+    <rect x="260" y="12" width="250" height="108" fill="#d0569c" fill-opacity=".14"/>
+    <path d="M260 120 V12 M260 120 H510" stroke="currentColor" stroke-opacity=".5" stroke-dasharray="5 5" fill="none"/>
+    <path d="M60 120 H260 V220" fill="none" stroke="currentColor" stroke-width="2.5"/>
+    <path d="M60 220 H515 M60 220 V8" stroke="currentColor" stroke-opacity=".7" stroke-width="1.5" fill="none"/>
+    <g stroke="currentColor" stroke-width="1.8" fill="none">
+      <path d="M400 175 H266"/><path d="M160 60 V114"/><path d="M400 55 L265 117"/><path d="M215 165 V126"/>
+    </g>
+    <g fill="currentColor">
+      <circle cx="400" cy="175" r="4"/><circle cx="160" cy="60" r="4"/><circle cx="400" cy="55" r="4"/><circle cx="215" cy="165" r="4"/>
+      <path d="M260 175 l9 -5 v10z"/><path d="M160 120 l-5 -9 h10z"/><path d="M260 120 l5 -10 l5 8z"/><path d="M215 120 l-5 9 h10z"/>
+      <text x="290" y="200">right: d = q.x</text>
+      <text x="74" y="40">above: d = q.y</text>
+      <text x="300" y="34">corner: d = length(q)</text>
+      <text x="72" y="196">inside:</text><text x="72" y="212">d = max(q.x, q.y)</text>
+      <text x="236" y="240">b.x</text><text x="30" y="125">b.y</text>
+      <text x="42" y="238">0</text>
+    </g>
+  </g>
+</svg>
+<figcaption>After folding with abs, only the top-right quarter matters. The dashed lines continue the box's edges and split the outside into three regions.</figcaption>
+</figure>
+<ul>
+<li><b>To the right</b> (q.x &gt; 0, q.y &lt; 0): the nearest point is straight left, on the right edge. Distance = q.x.</li>
+<li><b>Above</b> (q.y &gt; 0, q.x &lt; 0): straight down to the top edge. Distance = q.y.</li>
+<li><b>Diagonally past the corner</b> (both positive): the nearest point is the corner itself, and q is exactly the arrow from the corner to you. Distance = length(q).</li>
+<li><b>Inside</b> (both negative): the nearest edge is whichever is closer, the one whose gap is smaller. The distances to the edges are −q.x and −q.y, so the nearest is −max(q.x, q.y) away, and since we're inside, the signed distance is max(q.x, q.y), a negative number.</li>
+</ul>
+<p><b>Step 4: one formula for all four.</b> <code>max(q, 0.0)</code> zeroes out any negative part, so <code>length(max(q, 0.0))</code> gives q.x, q.y or length(q) in the three outside regions, and 0 inside. And <code>min(max(q.x, q.y), 0.0)</code> is the inside answer, and 0 outside. Add them:</p>
+<pre class="snip"><code>float sdBox(vec2 p, vec2 b) {
+    vec2 q = abs(p) - b;
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
+}</code></pre>
+<p>Here it is in the field view, with its corners rounded by subtracting r (and shrinking the box by r first so its size stays the same). The circle around your pointer has a radius equal to the distance at its center, so it always just touches the box. Drag on the canvas to move it:</p>
+<figure class="ex long" id="ex-box" data-ex="box" data-label="Example 8.4" data-title="A rounded box, and a probe circle that just touches it" data-cfg='{}'><figcaption><span class="ex-n">Example 8.4</span><span>A rounded box, and a probe circle that just touches it</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>float sdBox(vec2 p, vec2 b) {
+    vec2 q = abs(p) - b;
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
+}
+
+vec3 field(float d, float px) {
+    vec3 col = d &gt; 0.0 ? vec3(0.95, 0.6, 0.3) : vec3(0.4, 0.65, 1.0);
+    col *= 1.0 - exp(-4.0 * abs(d));
+    col *= 0.8 + 0.2 * cos(125.66 * d);
+    return mix(col, vec3(1.0), 1.0 - smoothstep(0.0, 1.5 * px, abs(d)));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    float r = 0.15 + 0.15 * sin(iTime);              // corner rounding, 0 .. 0.3
+    vec2 halfSize = vec2(0.7, 0.4);
+    float d = sdBox(uv, halfSize - r) - r;           // shrink, then grow back rounded
+    vec3 col = field(d, px);
+
+    // the probe: a circle around the pointer whose radius is the distance there
+    vec2 m = (iMouse.xy * 2.0 - iResolution.xy) / iResolution.y;
+    if (iMouse.xy == vec2(0.0)) m = vec2(1.05 * cos(iTime * 0.4), 0.75 * sin(iTime * 0.6));
+    float dm = sdBox(m, halfSize - r) - r;
+    col = mix(col, vec3(1.0), 1.0 - smoothstep(0.0, 1.5 * px, abs(length(uv - m) - abs(dm))));
+    col = mix(col, vec3(1.0), 1.0 - smoothstep(0.0, px, length(uv - m) - 0.02));
+
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn ex-more" type="button" data-label="Show all 30 lines">Show all 30 lines</button><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+float sdBox(vec2 p, vec2 b) {
+    vec2 q = abs(p) - b;
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
+}
+
+vec3 field(float d, float px) {
+    vec3 col = d > 0.0 ? vec3(0.95, 0.6, 0.3) : vec3(0.4, 0.65, 1.0);
+    col *= 1.0 - exp(-4.0 * abs(d));
+    col *= 0.8 + 0.2 * cos(125.66 * d);
+    return mix(col, vec3(1.0), 1.0 - smoothstep(0.0, 1.5 * px, abs(d)));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    float r = 0.15 + 0.15 * sin(iTime);              // corner rounding, 0 .. 0.3
+    vec2 halfSize = vec2(0.7, 0.4);
+    float d = sdBox(uv, halfSize - r) - r;           // shrink, then grow back rounded
+    vec3 col = field(d, px);
+
+    // the probe: a circle around the pointer whose radius is the distance there
+    vec2 m = (iMouse.xy * 2.0 - iResolution.xy) / iResolution.y;
+    if (iMouse.xy == vec2(0.0)) m = vec2(1.05 * cos(iTime * 0.4), 0.75 * sin(iTime * 0.6));
+    float dm = sdBox(m, halfSize - r) - r;
+    col = mix(col, vec3(1.0), 1.0 - smoothstep(0.0, 1.5 * px, abs(length(uv - m) - abs(dm))));
+    col = mix(col, vec3(1.0), 1.0 - smoothstep(0.0, px, length(uv - m) - 0.02));
+
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<p>Watch the bands outside the corners: they're round, because past a corner the nearest point is the corner. Inside, the bands are boxes with mitered (diagonal-cut) corners. The probe circle is a promise: <em>nothing is closer than this</em>. Chapter 13 turns that promise into 3D rendering.</p>
+
+<h2 id="segment"><span class="sec-n">8.5</span>A line segment, by projection</h2>
+<p>Chapter 7's projection gives the distance to a segment from a to b. The idea: find the point on the segment closest to p, then measure the distance to it.</p>
+<ol>
+<li><code>pa = p - a</code> is the arrow from a to p, and <code>ba = b - a</code> is the segment itself.</li>
+<li>How far along the segment is p's shadow? Project: <code>dot(pa, ba) / dot(ba, ba)</code>. This is 0 at a and 1 at b. (Dividing by <code>dot(ba, ba)</code>, the squared length, both normalizes and converts to "fraction of the segment" in one go.)</li>
+<li>Clamp that to 0..1 so the closest point can't run past either end.</li>
+<li>The closest point is <code>a + ba * h</code>, and p's distance from it is <code>length(pa - ba * h)</code>.</li>
+</ol>
+<pre class="snip"><code>float sdSegment(vec2 p, vec2 a, vec2 b) {
+    vec2 pa = p - a, ba = b - a;
+    float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);   // 0 at a, 1 at b
+    return length(pa - ba * h);
+}</code></pre>
+<p>This is an unsigned distance (a segment has no inside), but subtracting a thickness turns it into a solid capsule with rounded ends. Segments and circles are enough for a working clock, reading your computer's time from the uniform <code>iDate</code>:</p>
+<figure class="ex long" id="ex-clock" data-ex="clock" data-label="Example 8.5" data-title="A clock made of segments, set to your computer&#x27;s time" data-cfg='{}'><figcaption><span class="ex-n">Example 8.5</span><span>A clock made of segments, set to your computer's time</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>float sdSegment(vec2 p, vec2 a, vec2 b) {
+    vec2 pa = p - a, ba = b - a;
+    float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+    return length(pa - ba * h);
+}
+
+// The direction of a clock hand: 'turns' is 0..1 clockwise from 12 o'clock.
+vec2 hand(float turns) {
+    float a = 1.5708 - turns * 6.28318;      // start at the top, go clockwise
+    return vec2(cos(a), sin(a));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    float secs = iDate.w;                    // seconds since midnight
+    float s = fract(secs / 60.0);            // each hand: how far round its dial, 0..1
+    float m = fract(secs / 3600.0);
+    float h = fract(secs / 43200.0);         // 12 hours = 43200 seconds per turn
+
+    vec3 col = vec3(0.08, 0.09, 0.12);
+    float face = length(uv) - 0.85;
+    col = mix(col, vec3(0.95, 0.93, 0.88), 1.0 - smoothstep(-px, px, face));
+
+    for (int i = 0; i &lt; 12; i++) {           // twelve tick marks
+        vec2 dir = hand(float(i) / 12.0);
+        float t = sdSegment(uv, dir * 0.7, dir * 0.78) - 0.012;
+        col = mix(col, vec3(0.2), 1.0 - smoothstep(-px, px, t));
+    }
+    float hands = min(sdSegment(uv, vec2(0.0), hand(h) * 0.42) - 0.03,
+                      sdSegment(uv, vec2(0.0), hand(m) * 0.62) - 0.02);
+    col = mix(col, vec3(0.15), 1.0 - smoothstep(-px, px, hands));
+    float sec = sdSegment(uv, -hand(s) * 0.12, hand(s) * 0.7) - 0.006;
+    col = mix(col, vec3(0.9, 0.3, 0.2), 1.0 - smoothstep(-px, px, sec));
+
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn ex-more" type="button" data-label="Show all 38 lines">Show all 38 lines</button><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+float sdSegment(vec2 p, vec2 a, vec2 b) {
+    vec2 pa = p - a, ba = b - a;
+    float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+    return length(pa - ba * h);
+}
+
+// The direction of a clock hand: 'turns' is 0..1 clockwise from 12 o'clock.
+vec2 hand(float turns) {
+    float a = 1.5708 - turns * 6.28318;      // start at the top, go clockwise
+    return vec2(cos(a), sin(a));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    float secs = iDate.w;                    // seconds since midnight
+    float s = fract(secs / 60.0);            // each hand: how far round its dial, 0..1
+    float m = fract(secs / 3600.0);
+    float h = fract(secs / 43200.0);         // 12 hours = 43200 seconds per turn
+
+    vec3 col = vec3(0.08, 0.09, 0.12);
+    float face = length(uv) - 0.85;
+    col = mix(col, vec3(0.95, 0.93, 0.88), 1.0 - smoothstep(-px, px, face));
+
+    for (int i = 0; i < 12; i++) {           // twelve tick marks
+        vec2 dir = hand(float(i) / 12.0);
+        float t = sdSegment(uv, dir * 0.7, dir * 0.78) - 0.012;
+        col = mix(col, vec3(0.2), 1.0 - smoothstep(-px, px, t));
+    }
+    float hands = min(sdSegment(uv, vec2(0.0), hand(h) * 0.42) - 0.03,
+                      sdSegment(uv, vec2(0.0), hand(m) * 0.62) - 0.02);
+    col = mix(col, vec3(0.15), 1.0 - smoothstep(-px, px, hands));
+    float sec = sdSegment(uv, -hand(s) * 0.12, hand(s) * 0.7) - 0.006;
+    col = mix(col, vec3(0.9, 0.3, 0.2), 1.0 - smoothstep(-px, px, sec));
+
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<p>Notice <code>min</code> combining the hour and minute hands into one shape. That's the next section.</p>
+
+<h2 id="combine"><span class="sec-n">8.6</span>Combining shapes: min, max and minus</h2>
+<p>Because SDFs are just numbers, combining shapes is arithmetic. Say d1 and d2 are the distances to two shapes:</p>
+<ul>
+<li><b>Union</b> (either shape): <code>min(d1, d2)</code>. The distance to the pair is the distance to whichever is nearer.</li>
+<li><b>Intersection</b> (only where they overlap): <code>max(d1, d2)</code>. You're inside only if both distances are negative, which means the larger one is negative.</li>
+<li><b>Subtraction</b> (shape 1 with shape 2 cut out): <code>max(d1, -d2)</code>. Negating d2 swaps its inside and outside, so this is "inside shape 1 and outside shape 2".</li>
+</ul>
+<figure class="ex long" id="ex-combine" data-ex="combine" data-label="Example 8.6" data-title="Union, intersection, subtraction of a box and a circle" data-cfg='{}'><figcaption><span class="ex-n">Example 8.6</span><span>Union, intersection, subtraction of a box and a circle</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>float sdBox(vec2 p, vec2 b) {
+    vec2 q = abs(p) - b;
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
+}
+
+vec3 field(float d, float px) {
+    vec3 col = d &gt; 0.0 ? vec3(0.95, 0.6, 0.3) : vec3(0.4, 0.65, 1.0);
+    col *= 1.0 - exp(-4.0 * abs(d));
+    col *= 0.8 + 0.2 * cos(125.66 * d);
+    return mix(col, vec3(1.0), 1.0 - smoothstep(0.0, 1.5 * px, abs(d)));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    float panelW = iResolution.x / 3.0;
+    float panel = floor(fragCoord.x / panelW);                  // 0, 1, 2
+    vec2 local = vec2(fragCoord.x - panel * panelW, fragCoord.y);
+    vec2 p = (local * 2.0 - vec2(panelW, iResolution.y)) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    float d1 = sdBox(p, vec2(0.35, 0.35));                      // shape 1: a box
+    float d2 = length(p - vec2(0.3 * sin(iTime), 0.3)) - 0.3;   // shape 2: a moving circle
+
+    float d;
+    if (panel == 0.0)      d = min(d1, d2);                     // union
+    else if (panel == 1.0) d = max(d1, d2);                     // intersection
+    else                   d = max(d1, -d2);                    // box minus circle
+
+    vec3 col = field(d, px);
+    if (local.x &lt; 1.5) col = vec3(0.3);
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn ex-more" type="button" data-label="Show all 31 lines">Show all 31 lines</button><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+float sdBox(vec2 p, vec2 b) {
+    vec2 q = abs(p) - b;
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
+}
+
+vec3 field(float d, float px) {
+    vec3 col = d > 0.0 ? vec3(0.95, 0.6, 0.3) : vec3(0.4, 0.65, 1.0);
+    col *= 1.0 - exp(-4.0 * abs(d));
+    col *= 0.8 + 0.2 * cos(125.66 * d);
+    return mix(col, vec3(1.0), 1.0 - smoothstep(0.0, 1.5 * px, abs(d)));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    float panelW = iResolution.x / 3.0;
+    float panel = floor(fragCoord.x / panelW);                  // 0, 1, 2
+    vec2 local = vec2(fragCoord.x - panel * panelW, fragCoord.y);
+    vec2 p = (local * 2.0 - vec2(panelW, iResolution.y)) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    float d1 = sdBox(p, vec2(0.35, 0.35));                      // shape 1: a box
+    float d2 = length(p - vec2(0.3 * sin(iTime), 0.3)) - 0.3;   // shape 2: a moving circle
+
+    float d;
+    if (panel == 0.0)      d = min(d1, d2);                     // union
+    else if (panel == 1.0) d = max(d1, d2);                     // intersection
+    else                   d = max(d1, -d2);                    // box minus circle
+
+    vec3 col = field(d, px);
+    if (local.x < 1.5) col = vec3(0.3);
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<aside class="box note"><span class="box-t">Not quite exact any more</span><p>After max or subtraction, the result is still negative inside and positive outside, so it draws perfectly. But some of its values (look at the bands inside the intersection) are no longer the true distance; they can be smaller. That's called a <b>bound</b>: it never overestimates. For drawing it doesn't matter, and for 3D in Chapter 13 a bound is still safe, because a step of that size never overshoots.</p></aside>
+
+<h2 id="smooth"><span class="sec-n">8.7</span>Melting shapes together: smooth minimum</h2>
+<p><code>min</code> joins two shapes with a sharp crease where they meet. A <b>smooth minimum</b> blends them instead, adding material in the crease so the shapes flow together like drops of liquid:</p>
+<pre class="snip"><code>float smin(float a, float b, float k) {
+    float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+    return mix(b, a, h) - k * h * (1.0 - h);
+}</code></pre>
+<aside class="box math"><span class="box-t">Math from zero: how smin works</span>
+<p>k is the blending distance. Look at <code>h</code>: when a is smaller than b by more than k, h is clamped to 1 and the result is <code>mix(b, a, 1) - 0 = a</code>, the ordinary min. When b is smaller by more than k, h is 0 and you get b. So far from the meeting point, smin is exactly min.</p>
+<p>When a and b are within k of each other, which happens near where the shapes meet, h is in between: mix blends the two distances, and <code>k * h * (1 - h)</code>, a small hump that peaks at h = 0.5 (where a = b), pulls the result lower. A lower distance means "more inside", so material appears in the crease.</p>
+</aside>
+<figure class="ex" id="ex-blobs" data-ex="blobs" data-label="Example 8.7" data-title="Metaballs: six circles joined with smin" data-cfg='{}'><figcaption><span class="ex-n">Example 8.7</span><span>Metaballs: six circles joined with smin</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>float smin(float a, float b, float k) {
+    float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+    return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    float d = 100.0;                                   // start far away from everything
+    for (int i = 0; i &lt; 6; i++) {
+        float fi = float(i);
+        vec2 c = vec2(0.9 * cos(iTime * (0.3 + 0.07 * fi) + fi * 2.1),
+                      0.5 * sin(iTime * (0.4 + 0.05 * fi) + fi * 1.3));
+        d = smin(d, length(uv - c) - (0.16 + 0.025 * fi), 0.25);   // try k = 0.0 or 0.5
+    }
+
+    vec3 col = vec3(0.04, 0.04, 0.07);
+    col += vec3(1.0, 0.45, 0.2) * 0.01 / max(abs(d), 0.003);         // glow around the edge
+    vec3 inside = mix(vec3(1.0, 0.8, 0.35), vec3(0.85, 0.2, 0.4), clamp(-d * 5.0, 0.0, 1.0));
+    col = mix(col, inside, 1.0 - smoothstep(-px, px, d));
+
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+float smin(float a, float b, float k) {
+    float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+    return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    float d = 100.0;                                   // start far away from everything
+    for (int i = 0; i < 6; i++) {
+        float fi = float(i);
+        vec2 c = vec2(0.9 * cos(iTime * (0.3 + 0.07 * fi) + fi * 2.1),
+                      0.5 * sin(iTime * (0.4 + 0.05 * fi) + fi * 1.3));
+        d = smin(d, length(uv - c) - (0.16 + 0.025 * fi), 0.25);   // try k = 0.0 or 0.5
+    }
+
+    vec3 col = vec3(0.04, 0.04, 0.07);
+    col += vec3(1.0, 0.45, 0.2) * 0.01 / max(abs(d), 0.003);         // glow around the edge
+    vec3 inside = mix(vec3(1.0, 0.8, 0.35), vec3(0.85, 0.2, 0.4), clamp(-d * 5.0, 0.0, 1.0));
+    col = mix(col, inside, 1.0 - smoothstep(-px, px, d));
+
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<details class="predict"><summary>What happens with k = 0.0? And with a much bigger k, like 0.5?</summary>
+<div><p>With k = 0 the formula divides by zero, so it's undefined (use plain <code>min</code> for no blending). A tiny k like 0.01 gives separate circles with sharp creases where they touch. A big k like 0.5 makes the blobs reach for each other from far away, and the whole group swells into one soft mass, because smin always subtracts a little, which grows every shape.</p></div></details>
+<aside class="box aha"><span class="box-t">// AHA</span><p>Shapes are numbers, so modeling is arithmetic: min joins, max intersects, minus cuts, smin melts. The same four operations build the 3D scenes in Part II.</p></aside>
+
+<h2 id="fwidth"><span class="sec-n">8.8</span>When you don't know how big a pixel is</h2>
+<p>All the edges above used <code>px = 2.0 / iResolution.y</code>, which is right as long as you haven't zoomed or warped the coordinates. After you scale space (Chapter 9) or bend it (Chapters 10 and 11), one pixel might be a much bigger or smaller step in distance. The GPU can measure it for you: <code>fwidth(d)</code> tells you how much <code>d</code> changes from this pixel to its neighbors. Then:</p>
+<pre class="snip"><code>float w = fwidth(d);                         // how much d changes across one pixel
+float fill = 1.0 - smoothstep(-w, w, d);     // a crisp edge at any zoom</code></pre>
+<p>How can one pixel know about its neighbors' values? The GPU runs pixels in little 2 × 2 groups in lockstep, and can compare their values directly. Chapter 17 explains.</p>
+
+<section class="summary">
+<h2>What you now know</h2>
+<ul>
+<li>Yes/no tests make jagged edges (aliasing). A distance lets you estimate coverage: <code>1.0 - smoothstep(-px, px, d)</code>.</li>
+<li>A signed distance function returns: positive outside, zero on the edge, negative inside. Circle: <code>length(p) - r</code>.</li>
+<li>One distance gives fill, outline (<code>abs(d) - t</code>), glow (<code>k / abs(d)</code>), ripples (<code>fract(d * n)</code>) and rounding (<code>d - r</code>).</li>
+<li>Box: fold with abs, measure past the edges with <code>q = abs(p) - b</code>, then handle the corner, edge and inside cases.</li>
+<li>Segment: project onto it, clamp to the ends, measure to the closest point.</li>
+<li>Union = <code>min</code>, intersection = <code>max</code>, subtraction = <code>max(d1, -d2)</code>, melting = <code>smin</code>.</li>
+<li><code>fwidth(d)</code> measures a pixel in distance units, for crisp edges at any zoom.</li>
+</ul>
+</section>
+
+<div class="try"><span class="box-t">Exercises</span>
+<p><b>1.</b> Draw a ring with a gap in it, like the letter C: a circle outline minus a box.</p>
+<details><summary>Hint</summary><div><pre class="snip"><code>float ring = abs(length(uv) - 0.5) - 0.05;
+float gap  = sdBox(uv - vec2(0.5, 0.0), vec2(0.2, 0.12));
+float d    = max(ring, -gap);</code></pre></div></details>
+<p><b>2.</b> Add a draggable blob to <code>blobs</code>: one more circle at the mouse position.</p>
+<p><b>3.</b> Draw a simple house: a box for the walls, a smaller box cut out for the door (subtraction), and a roof made from two thick segments meeting at the top. Join the walls and roof with <code>min</code>.</p>
+<p><b>4.</b> In the <code>effects</code> example, swap the circle for <code>sdBox</code>. Every effect still works, which is the point.</p>
+</div>
+<p><b>Go deeper:</b> <a href="https://iquilezles.org/articles/distfunctions2d/" target="_blank" rel="noopener">Inigo Quilez's 2D distance functions</a>, a catalog of dozens of shapes with live examples, and <a href="https://iquilezles.org/articles/smin/" target="_blank" rel="noopener">his article on smooth minimum</a>.</p>
+
+<nav class="ch-nav" aria-label="Chapters"><a href="07-vectors.html"><small>← Chapter 7</small><b>Vectors: arrows, distances and directions</b></a><a class="next" href="09-moving-space.html"><small>Chapter 9 →</small><b>Moving space: translate, rotate, scale</b></a></nav>
+</article>
+</div></div>
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="../assets/reference.js"></script><script src="../assets/engine.js"></script><script src="../assets/editor.js"></script><script src="../assets/widgets.js"></script><script src="../assets/site.js"></script>
+</body>
+</html>

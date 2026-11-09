@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>6. Color: light, gradients and palettes · Shader Fragments</title>
+<meta name="description" content="Additive light, brightness, gradients, HSV, cosine palettes, gamma and tone mapping.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="../assets/icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+
+</head>
+<body data-page="chapter" data-root="..">
+<header class="top"><div class="top-in">
+  <a class="logo" href="../index.html"><span class="logo-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="word">Shader Fragments</span></a>
+  <nav class="nav" aria-label="Main"><a href="../index.html#contents">Contents</a><a href="../reference.html">Reference</a><a href="../playground.html">Playground</a></nav>
+</div></header>
+<main>
+<div class="wrap"><div class="chapter">
+<header class="ch-head">
+  <p class="eyebrow"><b>Part I · Foundations</b> · Chapter 6</p>
+  <h1>Color: light, gradients and palettes</h1>
+  <p class="lede">You know a color is three numbers. This chapter is about choosing good ones: how light mixes, why green looks brighter than blue at the same value, how to build gradients and whole palettes from a formula, and two technical ideas, gamma and tone mapping, that separate muddy pictures from glowing ones.</p>
+  <details class="ch-toc" open><summary>In this chapter</summary><ol><li><a href="#light">Light, not paint</a></li><li><a href="#cube">The space of all colors</a></li><li><a href="#brightness">Brightness and grey</a></li><li><a href="#gradients">Gradients with mix</a></li><li><a href="#multiply-add">Multiplying and adding colors</a></li><li><a href="#hue">Hue as an angle: HSV</a></li><li><a href="#palettes">Cosine palettes</a></li><li><a href="#gamma">Why 0.5 isn't half as bright: gamma</a></li><li><a href="#tonemap">Too bright: tone mapping</a></li></ol></details>
+</header>
+<aside class="stage" id="workbench" data-start="light-add" aria-label="Workbench: live shader and code"></aside>
+<article class="ch-body">
+
+
+
+<h2 id="light"><span class="sec-n">6.1</span>Light, not paint</h2>
+<p>A screen makes color by adding light, so its colors mix the way spotlights do, not the way paints do. Paint absorbs light, so mixing paints removes more and gets darker. Light adds, so mixing lights gets brighter. This is called <b>additive</b> color. Three overlapping spotlights show every combination at once:</p>
+<figure class="ex" id="ex-light-add" data-ex="light-add" data-label="Example 6.1" data-title="Three spotlights: light adds up" data-cfg='{}'><figcaption><span class="ex-n">Example 6.1</span><span>Three spotlights: light adds up</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+
+    // three disc-shaped lights, each 1.0 inside and 0.0 outside (soft edges)
+    float r = 1.0 - smoothstep(0.55, 0.57, length(uv - vec2(-0.3, 0.2)));
+    float g = 1.0 - smoothstep(0.55, 0.57, length(uv - vec2( 0.3, 0.2)));
+    float b = 1.0 - smoothstep(0.55, 0.57, length(uv - vec2( 0.0, -0.3)));
+
+    vec3 col = vec3(0.0);
+    col += vec3(1.0, 0.0, 0.0) * r;   // red light
+    col += vec3(0.0, 1.0, 0.0) * g;   // green light
+    col += vec3(0.0, 0.0, 1.0) * b;   // blue light
+
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+
+    // three disc-shaped lights, each 1.0 inside and 0.0 outside (soft edges)
+    float r = 1.0 - smoothstep(0.55, 0.57, length(uv - vec2(-0.3, 0.2)));
+    float g = 1.0 - smoothstep(0.55, 0.57, length(uv - vec2( 0.3, 0.2)));
+    float b = 1.0 - smoothstep(0.55, 0.57, length(uv - vec2( 0.0, -0.3)));
+
+    vec3 col = vec3(0.0);
+    col += vec3(1.0, 0.0, 0.0) * r;   // red light
+    col += vec3(0.0, 1.0, 0.0) * g;   // green light
+    col += vec3(0.0, 0.0, 1.0) * b;   // blue light
+
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<p>Red and green overlap into yellow, green and blue into cyan, red and blue into magenta, and all three into white. Each <code>col +=</code> line adds one light. You'll write <code>col +=</code> for glows and light effects throughout the course, precisely because light adds.</p>
+
+<h2 id="cube"><span class="sec-n">6.2</span>The space of all colors</h2>
+<p>Since a color is three numbers between 0 and 1, every color is a point inside a cube: red along one edge, green along another, blue along the third. Black is one corner (0, 0, 0), white the opposite corner (1, 1, 1), and the line between them is all the greys. Here is a slice through the cube, with red across, green up, and blue changing over time:</p>
+<figure class="ex" id="ex-rgb-cube" data-ex="rgb-cube" data-label="Example 6.2" data-title="A moving slice through the RGB cube" data-cfg='{}'><figcaption><span class="ex-n">Example 6.2</span><span>A moving slice through the RGB cube</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    float blue = 0.5 + 0.5 * sin(iTime);       // the slice slides through the cube
+
+    fragColor = vec4(uv.x, uv.y, blue, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    float blue = 0.5 + 0.5 * sin(iTime);       // the slice slides through the cube
+
+    fragColor = vec4(uv.x, uv.y, blue, 1.0);
+}
+</script></figure>
+
+<h2 id="brightness"><span class="sec-n">6.3</span>Brightness and grey</h2>
+<p>Equal amounts of red, green and blue always make a grey, from black to white. But our eyes don't treat the three channels equally. We're far more sensitive to green than to blue, so pure green at full value looks much brighter than pure blue at full value. The perceived brightness, called <b>luminance</b>, is a weighted sum:</p>
+<div class="formula">luminance ≈ 0.299 × red + 0.587 × green + 0.114 × blue</div>
+<p>In GLSL that's <code>dot(col, vec3(0.299, 0.587, 0.114))</code> (the dot function multiplies matching slots and adds them; Chapter 7 explains it). It's the right way to turn a color into grey:</p>
+<figure class="ex" id="ex-luminance" data-ex="luminance" data-label="Example 6.3" data-title="Pure red, green and blue, and how bright they really look" data-cfg='{}'><figcaption><span class="ex-n">Example 6.3</span><span>Pure red, green and blue, and how bright they really look</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+
+    vec3 col = vec3(1.0, 0.0, 0.0);                  // left third: red
+    if (uv.x &gt; 0.333) col = vec3(0.0, 1.0, 0.0);     // middle: green
+    if (uv.x &gt; 0.666) col = vec3(0.0, 0.0, 1.0);     // right: blue
+
+    float lum = dot(col, vec3(0.299, 0.587, 0.114)); // perceived brightness
+    if (uv.y &lt; 0.5) col = vec3(lum);                 // bottom half: shown as grey
+
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+
+    vec3 col = vec3(1.0, 0.0, 0.0);                  // left third: red
+    if (uv.x > 0.333) col = vec3(0.0, 1.0, 0.0);     // middle: green
+    if (uv.x > 0.666) col = vec3(0.0, 0.0, 1.0);     // right: blue
+
+    float lum = dot(col, vec3(0.299, 0.587, 0.114)); // perceived brightness
+    if (uv.y < 0.5) col = vec3(lum);                 // bottom half: shown as grey
+
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<p>Each of the three has one channel at full strength, yet the greys underneath are very different. This matters whenever you pick colors: a palette with pure blue next to pure green will look lopsided.</p>
+
+<h2 id="gradients"><span class="sec-n">6.4</span>Gradients with mix</h2>
+<p>Chapter 4's <code>mix(a, b, t)</code> blends two colors. For more than two colors, chain mixes, each switched on in its own range with smoothstep. Here's a sky with three stops:</p>
+<figure class="ex" id="ex-gradient-stops" data-ex="gradient-stops" data-label="Example 6.4" data-title="A three-stop gradient: horizon, sky, space" data-cfg='{}'><figcaption><span class="ex-n">Example 6.4</span><span>A three-stop gradient: horizon, sky, space</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    float y = uv.y;
+
+    vec3 horizon = vec3(1.0, 0.55, 0.3);
+    vec3 sky     = vec3(0.35, 0.45, 0.85);
+    vec3 space   = vec3(0.03, 0.03, 0.12);
+
+    vec3 col = mix(horizon, sky, smoothstep(0.0, 0.45, y));   // first blend, low down
+    col = mix(col, space, smoothstep(0.5, 1.0, y));           // second blend, higher up
+
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    float y = uv.y;
+
+    vec3 horizon = vec3(1.0, 0.55, 0.3);
+    vec3 sky     = vec3(0.35, 0.45, 0.85);
+    vec3 space   = vec3(0.03, 0.03, 0.12);
+
+    vec3 col = mix(horizon, sky, smoothstep(0.0, 0.45, y));   // first blend, low down
+    col = mix(col, space, smoothstep(0.5, 1.0, y));           // second blend, higher up
+
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<p>Each smoothstep decides <em>where</em> its blend happens. Overlapping or separating the ranges changes the feel completely: try making the first one end at 0.15.</p>
+
+<h2 id="multiply-add"><span class="sec-n">6.5</span>Multiplying and adding colors</h2>
+<p>Two operations do most of the work in color code, and each has a physical meaning:</p>
+<ul>
+<li><b>Multiplying</b> two colors is filtering: the light passes through something that lets each channel through by a certain amount (Chapter 2's blue glass). Multiplying by a single number dims or brightens: <code>col * 0.5</code> is half as bright. Multiplying is also how lighting works in 3D: the light's color times the surface's color.</li>
+<li><b>Adding</b> is more light. Adding a glow on top of a scene, adding the light from several sources.</li>
+</ul>
+<p>Addition has one danger: values can pass 1.0, and the screen clamps them to white. The section on tone mapping below deals with that.</p>
+
+<h2 id="hue"><span class="sec-n">6.6</span>Hue as an angle: HSV</h2>
+<p>RGB is how screens think, but not how people describe color. People think in <b>hue</b> (which color: red, orange, yellow…), <b>saturation</b> (how vivid versus greyish) and <b>value</b> (how bright). That's the <b>HSV</b> model. The hues form a circle, the color wheel, so hue is naturally an angle, written here as a number from 0 to 1 for one full turn.</p>
+<figure class="ex" id="ex-hsv" data-ex="hsv" data-label="Example 6.5" data-title="HSV: hue across, saturation up" data-cfg='{}'><figcaption><span class="ex-n">Example 6.5</span><span>HSV: hue across, saturation up</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>// Hue, saturation, value (each 0..1) to red, green, blue.
+vec3 hsv2rgb(vec3 c) {
+    vec3 rgb = clamp(abs(mod(c.x * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+    return c.z * mix(vec3(1.0), rgb, c.y);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+
+    float hue = uv.x;          // all the way around the color wheel
+    float sat = uv.y;          // washed out at the bottom, vivid at the top
+    float val = 1.0;
+
+    fragColor = vec4(hsv2rgb(vec3(hue, sat, val)), 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+// Hue, saturation, value (each 0..1) to red, green, blue.
+vec3 hsv2rgb(vec3 c) {
+    vec3 rgb = clamp(abs(mod(c.x * 6.0 + vec3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0, 0.0, 1.0);
+    return c.z * mix(vec3(1.0), rgb, c.y);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+
+    float hue = uv.x;          // all the way around the color wheel
+    float sat = uv.y;          // washed out at the bottom, vivid at the top
+    float val = 1.0;
+
+    fragColor = vec4(hsv2rgb(vec3(hue, sat, val)), 1.0);
+}
+</script></figure>
+<p>How does that one-line conversion work? Split the hue circle into six equal parts. Each channel follows the same flat-topped shape around the circle: fully on for a third of the way, ramping down over a sixth, off for a third, ramping back up over a sixth. The three channels use the same shape shifted around the circle by a third of a turn each (the 0, 4 and 2 are in sixths). <code>mod(… , 6.0)</code> wraps the circle, <code>abs(… - 3.0) - 1.0</code> builds the flat-topped ramp, and <code>clamp</code> cuts it off at 0 and 1. Then saturation mixes toward white (no hue), and value scales everything.</p>
+<p>Notice the bottom edge is white, not grey. Saturation 0 means "no hue at all", which leaves a grey exactly as bright as the value, and with value 1.0 that grey is white. Change <code>val</code> to 0.5 and the bottom becomes mid-grey.</p>
+<p>The big win: animating hue is now one number. <code>hsv2rgb(vec3(iTime * 0.1, 0.8, 1.0))</code> cycles smoothly around the rainbow.</p>
+
+<h2 id="palettes"><span class="sec-n">6.7</span>Cosine palettes</h2>
+<p>Inigo Quilez, one of the creators of Shadertoy, found a way to describe an entire palette with four vec3 numbers. It uses what you learned in Chapter 5: give each channel its own cosine wave.</p>
+<div class="formula">color(t) = a + b * cos(6.28318 * (c * t + d))</div>
+<ul>
+<li><code>a</code>: the middle brightness each wave swings around.</li>
+<li><code>b</code>: how far each wave swings (its amplitude).</li>
+<li><code>c</code>: how many times each wave cycles as t goes from 0 to 1 (its frequency).</li>
+<li><code>d</code>: how far each wave is shifted (its phase). Different shifts per channel are what create hues.</li>
+</ul>
+<p>The bottom half of this canvas plots the three waves and the top half shows the colors they make together:</p>
+<figure class="ex" id="ex-palette-plot" data-ex="palette-plot" data-label="Example 6.6" data-title="A palette is three waves out of step" data-cfg='{}'><figcaption><span class="ex-n">Example 6.6</span><span>A palette is three waves out of step</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>// Inigo Quilez's cosine palette: a number goes in, a color comes out.
+vec3 palette(float t) {
+    vec3 a = vec3(0.5, 0.5, 0.5);
+    vec3 b = vec3(0.5, 0.5, 0.5);
+    vec3 c = vec3(1.0, 1.0, 1.0);
+    vec3 d = vec3(0.00, 0.33, 0.67);   // try (0.0, 0.10, 0.20) or (0.30, 0.20, 0.20)
+    return a + b * cos(6.28318 * (c * t + d));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    vec3 pal = palette(uv.x);
+
+    vec3 col = pal;                          // top half: the palette
+    if (uv.y &lt; 0.5) {                        // bottom half: its three waves
+        float y = uv.y * 2.0;
+        float w = 3.0 / iResolution.y;
+        col = vec3(0.07);
+        col += vec3(1.0, 0.25, 0.25) * (1.0 - smoothstep(0.0, w, abs(y - pal.r)));
+        col += vec3(0.25, 1.0, 0.35) * (1.0 - smoothstep(0.0, w, abs(y - pal.g)));
+        col += vec3(0.35, 0.5, 1.0)  * (1.0 - smoothstep(0.0, w, abs(y - pal.b)));
+    }
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+// Inigo Quilez's cosine palette: a number goes in, a color comes out.
+vec3 palette(float t) {
+    vec3 a = vec3(0.5, 0.5, 0.5);
+    vec3 b = vec3(0.5, 0.5, 0.5);
+    vec3 c = vec3(1.0, 1.0, 1.0);
+    vec3 d = vec3(0.00, 0.33, 0.67);   // try (0.0, 0.10, 0.20) or (0.30, 0.20, 0.20)
+    return a + b * cos(6.28318 * (c * t + d));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    vec3 pal = palette(uv.x);
+
+    vec3 col = pal;                          // top half: the palette
+    if (uv.y < 0.5) {                        // bottom half: its three waves
+        float y = uv.y * 2.0;
+        float w = 3.0 / iResolution.y;
+        col = vec3(0.07);
+        col += vec3(1.0, 0.25, 0.25) * (1.0 - smoothstep(0.0, w, abs(y - pal.r)));
+        col += vec3(0.25, 1.0, 0.35) * (1.0 - smoothstep(0.0, w, abs(y - pal.g)));
+        col += vec3(0.35, 0.5, 1.0)  * (1.0 - smoothstep(0.0, w, abs(y - pal.b)));
+    }
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<details class="predict"><summary>Change d to vec3(0.0, 0.1, 0.2). What will the three waves do, and what happens to the colors?</summary>
+<div><p>The three waves bunch together, so red, green and blue rise and fall almost in unison. When the channels are nearly equal, the color is nearly grey, so the palette becomes a dark-to-light ramp with a warm tint. Spread the shifts apart again and the hues come back. Hue is literally the offset between three waves.</p></div></details>
+<p>A palette is a function from a number to a color, so you can feed it anything: a distance, a time, a position. Here it colors rings by their distance from the center, sliding with time:</p>
+<figure class="ex" id="ex-palette-use" data-ex="palette-use" data-label="Example 6.7" data-title="A palette fed with distance and time" data-cfg='{}'><figcaption><span class="ex-n">Example 6.7</span><span>A palette fed with distance and time</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>vec3 palette(float t) {
+    vec3 a = vec3(0.5, 0.5, 0.5);
+    vec3 b = vec3(0.5, 0.5, 0.5);
+    vec3 c = vec3(1.0, 1.0, 0.5);
+    vec3 d = vec3(0.80, 0.90, 0.30);
+    return a + b * cos(6.28318 * (c * t + d));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float r = length(uv);                              // distance from the center
+
+    vec3 col = palette(r * 0.8 - iTime * 0.2);         // color depends on distance and time
+    col *= 0.75 + 0.25 * sin(r * 40.0);                // fine ridges, for texture
+
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+vec3 palette(float t) {
+    vec3 a = vec3(0.5, 0.5, 0.5);
+    vec3 b = vec3(0.5, 0.5, 0.5);
+    vec3 c = vec3(1.0, 1.0, 0.5);
+    vec3 d = vec3(0.80, 0.90, 0.30);
+    return a + b * cos(6.28318 * (c * t + d));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float r = length(uv);                              // distance from the center
+
+    vec3 col = palette(r * 0.8 - iTime * 0.2);         // color depends on distance and time
+    col *= 0.75 + 0.25 * sin(r * 40.0);                // fine ridges, for texture
+
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<aside class="box aha"><span class="box-t">// AHA</span><p>A palette is three waves out of step. Four numbers in, endless coherent color out, and anything that produces a number (a distance, a time, a tile number) can be turned into color with it.</p></aside>
+
+<h2 id="gamma"><span class="sec-n">6.8</span>Why 0.5 isn't half as bright: gamma</h2>
+<p>Here's a surprise: a pixel with value 0.5 does not give off half as much light as a pixel with value 1.0. It gives off about a fifth. Screens apply a curve called <b>gamma</b>: the light that comes out is roughly the value raised to the power 2.2.</p>
+<p>The reason is historical and practical. Our eyes are much more sensitive to differences between dark shades than bright ones, so storing colors with this curve spends more of the available numbers on the darks, where we notice. Image files and screens agree on this curve (it's part of the standard called sRGB).</p>
+<p>For picking colors by eye, it doesn't matter: you see what you get. It matters when you do <em>light math</em>, like mixing light or computing lighting in 3D, because physical light adds linearly. The rule: do light math on <b>linear</b> values, and convert to screen values at the very end with <code>pow(col, vec3(1.0 / 2.2))</code>. You'll see that line at the end of every 3D shader in Chapters 13 and 14.</p>
+<figure class="ex" id="ex-gamma" data-ex="gamma" data-label="Example 6.8" data-title="Red to green: mixed as screen values (top) and as light (bottom)" data-cfg='{}'><figcaption><span class="ex-n">Example 6.8</span><span>Red to green: mixed as screen values (top) and as light (bottom)</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    vec3 red = vec3(1.0, 0.0, 0.0), green = vec3(0.0, 1.0, 0.0);
+
+    vec3 col;
+    if (uv.y &gt; 0.5) {
+        col = mix(red, green, uv.x);                       // naive: mix the screen values
+    } else {
+        vec3 lin = mix(pow(red, vec3(2.2)), pow(green, vec3(2.2)), uv.x);   // mix as light
+        col = pow(lin, vec3(1.0 / 2.2));                   // then convert for the screen
+    }
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    vec3 red = vec3(1.0, 0.0, 0.0), green = vec3(0.0, 1.0, 0.0);
+
+    vec3 col;
+    if (uv.y > 0.5) {
+        col = mix(red, green, uv.x);                       // naive: mix the screen values
+    } else {
+        vec3 lin = mix(pow(red, vec3(2.2)), pow(green, vec3(2.2)), uv.x);   // mix as light
+        col = pow(lin, vec3(1.0 / 2.2));                   // then convert for the screen
+    }
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<p>The top gradient sags into a dark olive in the middle, because (0.5, 0.5, 0) on screen is much less light than either end. The bottom one, mixed as real light, stays bright and passes through a clear yellow, which is what you'd see mixing two real lights.</p>
+
+<h2 id="tonemap"><span class="sec-n">6.9</span>Too bright: tone mapping</h2>
+<p>When you add lots of light, values go past 1.0 and get clamped. Everything above 1 becomes the same flat white, and detail is lost. <b>Tone mapping</b> squeezes any brightness from 0 to infinity into 0..1 smoothly instead of chopping it. A simple, good curve is:</p>
+<div class="formula">col = 1.0 - exp(-col)        // 0 stays 0, 1 becomes 0.63, 3 becomes 0.95, never reaches 1</div>
+<figure class="ex" id="ex-tonemap" data-ex="tonemap" data-label="Example 6.9" data-title="Glow clipped (left) and tone mapped (right)" data-cfg='{}'><figcaption><span class="ex-n">Example 6.9</span><span>Glow clipped (left) and tone mapped (right)</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+
+    // a bright glow: very large near the center
+    vec3 light = vec3(1.0, 0.5, 0.2) * 0.3 / length(uv - vec2(0.0, 0.0));
+
+    vec3 col = light;                            // left: values above 1 are simply clipped
+    if (uv.x &gt; 0.0) col = 1.0 - exp(-light);     // right: tone mapped, highlights keep shape
+
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+
+    // a bright glow: very large near the center
+    vec3 light = vec3(1.0, 0.5, 0.2) * 0.3 / length(uv - vec2(0.0, 0.0));
+
+    vec3 col = light;                            // left: values above 1 are simply clipped
+    if (uv.x > 0.0) col = 1.0 - exp(-light);     // right: tone mapped, highlights keep shape
+
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<p>On the left, the middle of the glow is a flat blob where the red channel is clipped and the color shifts toward yellow-white abruptly. On the right, the glow rolls off smoothly. The right side is also a little dimmer overall, because the curve bends every value down a bit. Photographers call the fix <b>exposure</b>: multiply before the curve, as in <code>1.0 - exp(-light * 2.0)</code>, and try a few values. This line is cheap insurance in any shader that adds light.</p>
+
+<section class="summary">
+<h2>What you now know</h2>
+<ul>
+<li>Screens add light: red + green = yellow, all three = white. Use <code>col +=</code> for light.</li>
+<li>Every color is a point in the RGB cube; equal channels are greys.</li>
+<li>Green looks brightest, blue darkest: luminance ≈ dot(col, vec3(0.299, 0.587, 0.114)).</li>
+<li>Chain <code>mix</code> with <code>smoothstep</code> for multi-stop gradients. Multiply to filter or dim, add for more light.</li>
+<li>HSV describes color as hue (an angle), saturation and value.</li>
+<li>Cosine palettes: <code>a + b * cos(6.28318 * (c * t + d))</code>, four vec3s for a whole palette.</li>
+<li>Screen values follow a gamma curve: do light math in linear values, then <code>pow(col, vec3(1.0 / 2.2))</code>. Tone map bright light with <code>1.0 - exp(-col)</code>.</li>
+</ul>
+</section>
+
+<div class="try"><span class="box-t">Exercises</span>
+<p><b>1.</b> Make a four-stop gradient from bottom to top: deep purple, pink, orange, pale yellow.</p>
+<p><b>2.</b> Use <code>hsv2rgb</code> to make the whole canvas cycle through the rainbow once every 10 seconds.</p>
+<details><summary>Solution</summary><div><pre class="snip"><code>vec3 col = hsv2rgb(vec3(iTime / 10.0, 0.8, 1.0));</code></pre></div></details>
+<p><b>3.</b> Find a palette (a, b, c, d) you love in the palette-plot example and write it down. You'll reuse it all course long.</p>
+</div>
+<p><b>Go deeper:</b> <a href="https://iquilezles.org/articles/palettes/" target="_blank" rel="noopener">Inigo Quilez on palettes</a>, and <a href="https://thebookofshaders.com/06/" target="_blank" rel="noopener">The Book of Shaders, chapter 6</a> on color and HSB.</p>
+
+<nav class="ch-nav" aria-label="Chapters"><a href="05-waves-and-time.html"><small>← Chapter 5</small><b>Waves and time: sin, cos and animation</b></a><a class="next" href="07-vectors.html"><small>Chapter 7 →</small><b>Vectors: arrows, distances and directions</b></a></nav>
+</article>
+</div></div>
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="../assets/reference.js"></script><script src="../assets/engine.js"></script><script src="../assets/editor.js"></script><script src="../assets/widgets.js"></script><script src="../assets/site.js"></script>
+</body>
+</html>

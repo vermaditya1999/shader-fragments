@@ -1,0 +1,207 @@
+<!--meta
+{"num": 1, "slug": "what-is-a-shader", "part": 1, "title": "What is a shader?", "summary": "Pixels, colors as numbers, the GPU, and the one function every pixel runs.", "hero": "both-ramps"}
+-->
+<p class="lede">Before any code, three facts: a screen is a grid of tiny lights, a color is three numbers, and a graphics card can work on millions of pixels at once. A shader is the small program that sits at the meeting point of those three facts. By the end of this chapter you'll be able to read every word of your first shader.</p>
+
+<h2 id="screen">Your screen is a grid of tiny lights</h2>
+<p>Look very closely at any screen (a magnifying glass or a phone camera zoomed all the way in works) and you'll see that the picture is made of a grid of tiny squares. Each square is a <b>pixel</b>, short for “picture element”. A laptop screen that is 1920 pixels wide and 1080 pixels tall has 1920 × 1080 = 2,073,600 of them.</p>
+<p>Each pixel is not one light but three: a red one, a green one and a blue one, packed so close together that your eye blends them into a single color. A pixel shows a color by setting how bright each of its three lights is.</p>
+<figure class="diagram">
+<svg viewBox="0 0 640 210" role="img" aria-label="A zoomed-in grid of pixels, each made of a red, a green and a blue light">
+  <g>
+    <rect x="10" y="10" width="190" height="190" rx="6" fill="none" stroke="currentColor" stroke-opacity=".35"/>
+    <g transform="translate(25,25)">
+      <rect x="0" y="0" width="160" height="160" fill="#f2a33a"/>
+      <rect x="0" y="40" width="160" height="40" fill="#e05a3a"/>
+      <rect x="0" y="80" width="160" height="40" fill="#7a4fd0"/>
+      <rect x="0" y="120" width="160" height="40" fill="#2a7fd0"/>
+      <g stroke="#000" stroke-opacity=".35"><path d="M40 0v160M80 0v160M120 0v160M0 40h160M0 80h160M0 120h160"/></g>
+      <rect x="80" y="40" width="40" height="40" fill="none" stroke="currentColor" stroke-width="3"/>
+    </g>
+  </g>
+  <path d="M146 66 L300 30 M146 104 L300 180" stroke="currentColor" stroke-opacity=".4" fill="none"/>
+  <g transform="translate(300,30)">
+    <rect x="0" y="0" width="150" height="150" fill="#111" stroke="currentColor" stroke-opacity=".5"/>
+    <rect x="12" y="12" width="36" height="126" fill="#ff2a2a" opacity=".95"/>
+    <rect x="57" y="12" width="36" height="126" fill="#2aff4a" opacity=".38"/>
+    <rect x="102" y="12" width="36" height="126" fill="#2a5bff" opacity=".22"/>
+  </g>
+  <g font-family="ui-monospace, monospace" font-size="15" fill="currentColor">
+    <text x="470" y="62">red   = 0.88</text>
+    <text x="470" y="95">green = 0.35</text>
+    <text x="470" y="128">blue  = 0.23</text>
+    <text x="470" y="170" opacity=".7">one pixel</text>
+  </g>
+</svg>
+<figcaption>Zoom into the grid and each pixel turns out to be three small lights. Their three brightnesses are the pixel's color.</figcaption>
+</figure>
+
+<h2 id="color-numbers">A color is three numbers</h2>
+<p>So a color is just three numbers: how bright the red light is, how bright the green is, and how bright the blue is. Shaders write each brightness as a number from <b>0.0</b> (off) to <b>1.0</b> (fully on). Half brightness is 0.5.</p>
+<aside class="math" title="Math from zero: the 0-to-1 scale">
+<p>You may have seen colors written as 0 to 255, like <code>rgb(255, 128, 0)</code> in CSS or <code>fill(255, 128, 0)</code> in p5.js. That's the same idea on a different scale. To go from 0–255 to 0–1, divide by 255: 128 / 255 ≈ 0.5. Shaders use 0 to 1 because it makes math easier: multiplying two brightnesses always gives another brightness between 0 and 1, and “halfway” is simply 0.5.</p>
+</aside>
+<p>Mixing light is different from mixing paint. Paint gets darker as you mix more colors in; light gets <em>brighter</em>, because you're adding more light. Red light plus green light makes yellow. All three at full brightness make white. All three off is black.</p>
+<table>
+<thead><tr><th>red, green, blue</th><th>looks like</th><th>why</th></tr></thead>
+<tbody>
+<tr><td><code>1.0, 0.0, 0.0</code></td><td><span class="sw" style="background:#f00"></span> red</td><td>only the red light is on</td></tr>
+<tr><td><code>1.0, 1.0, 0.0</code></td><td><span class="sw" style="background:#ff0"></span> yellow</td><td>red light + green light</td></tr>
+<tr><td><code>0.0, 1.0, 1.0</code></td><td><span class="sw" style="background:#0ff"></span> cyan</td><td>green + blue</td></tr>
+<tr><td><code>1.0, 0.0, 1.0</code></td><td><span class="sw" style="background:#f0f"></span> magenta</td><td>red + blue</td></tr>
+<tr><td><code>1.0, 1.0, 1.0</code></td><td><span class="sw" style="background:#fff"></span> white</td><td>everything on</td></tr>
+<tr><td><code>0.5, 0.5, 0.5</code></td><td><span class="sw" style="background:#808080"></span> grey</td><td>everything half on (equal amounts are always a grey)</td></tr>
+<tr><td><code>1.0, 0.5, 0.0</code></td><td><span class="sw" style="background:#ff8000"></span> orange</td><td>full red, half green</td></tr>
+</tbody>
+</table>
+<p>Shaders add a fourth number, <b>alpha</b>, for opacity: 1.0 means solid. On this site the canvas is always solid, so you'll always write 1.0 there and can ignore it.</p>
+
+<h2 id="gpu">Two million pixels, sixty times a second</h2>
+<p>A screen redraws itself about 60 times every second. Each redraw is a <b>frame</b>. If every pixel needs a color every frame, that's 2,073,600 × 60 ≈ 124 million colors per second. How does a computer keep up?</p>
+<p>The main processor in a computer, the <b>CPU</b>, is like a single brilliant chef: it can cook anything, very fast, but one dish at a time. Drawing in p5.js mostly works this way: your <code>draw()</code> runs commands one after another, <code>circle(…)</code>, then <code>rect(…)</code>, then the next.</p>
+<p>The graphics processor, the <b>GPU</b>, is a kitchen with thousands of simple cooks. None of them is brilliant, but they all follow the same recipe at the same moment, each on their own plate. Give every cook one pixel and the same short recipe, and a whole frame is done almost at once.</p>
+<p>A <b>shader</b> is that recipe. More precisely, the kind of shader in this course is a <b>fragment shader</b>: a program that the GPU runs once for every pixel, to decide that pixel's color. (“Fragment” is the GPU's word for a pixel being drawn; Chapter 17 explains the difference, which doesn't matter yet.)</p>
+
+<h2 id="one-question">One function, asked by every pixel</h2>
+<p>This is the big shift from p5.js. In p5 you say <em>where</em> to draw: <code>circle(200, 200, 50)</code>. In a shader you never say where. Instead, every pixel runs the same function and that function answers one question for that pixel: <b>“what color am I?”</b></p>
+<p>Because thousands of copies run at the same time, a few rules follow, and they shape everything in this course:</p>
+<ul>
+<li><b>Same code for everyone.</b> Every pixel runs exactly the same program. The only thing that differs between them is the input: each one knows its own position.</li>
+<li><b>No talking to neighbours.</b> A pixel can't ask what color the pixel next to it chose. They're all deciding at the same moment.</li>
+<li><b>No memory.</b> When a frame ends, everything is forgotten. Next frame, every pixel starts from scratch. (Chapter 15 shows the trick to get memory back.)</li>
+</ul>
+<p>These rules feel like handcuffs at first. They're also the reason shaders are fast enough to draw complicated pictures 60 times a second. Most of this course is about clever ways to get what you want while following them.</p>
+<aside class="aha"><p>You don't draw a picture. You write one rule, and every pixel applies it to itself at the same time. The picture is what the rule looks like across the whole screen.</p></aside>
+
+<h2 id="anatomy">Reading your first shader, word by word</h2>
+<p>Here's a complete shader. It runs in the preview below, and on the right in the workbench, where you can edit it.</p>
+<script type="text/x-glsl" data-ex="solid" data-title="Every pixel gives the same answer">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    fragColor = vec4(1.0, 0.5, 0.0, 1.0);
+}
+</script>
+<p>Every pixel runs this and every pixel gives the same answer, so the canvas is one flat orange. Let's read it piece by piece.</p>
+<script type="text/x-glsl-snippet">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+</script>
+<ul>
+<li><code>mainImage</code> is the name of the function. The program that runs your shader (the <b>runner</b>) looks for a function with exactly this name and calls it once for every pixel. It's like <code>draw()</code> in p5.js: you write it, but you never call it yourself.</li>
+<li><code>void</code>, written before the name, says the function doesn't hand back a value with <code>return</code>. Its answer leaves another way, through <code>fragColor</code>.</li>
+<li>Inside the parentheses are the function's <b>parameters</b>, the things that go in and out. There are two, separated by a comma.</li>
+<li><code>in vec2 fragCoord</code> is the input. <code>vec2</code> is a type: a bundle of two decimal numbers. <code>fragCoord</code> holds this pixel's position, its x and its y, measured in pixels. <code>in</code> means “given to you, read only”. (“frag” is short for fragment; “Coord” for coordinate.)</li>
+<li><code>out vec4 fragColor</code> is the output. <code>vec4</code> is a bundle of four decimal numbers: red, green, blue, alpha. <code>out</code> means “you fill this in”. Whatever is in <code>fragColor</code> when the function ends becomes the pixel's color.</li>
+<li>The curly braces <code>{ }</code> hold the body: the instructions.</li>
+</ul>
+<script type="text/x-glsl-snippet">
+    fragColor = vec4(1.0, 0.5, 0.0, 1.0);
+</script>
+<ul>
+<li><code>vec4(1.0, 0.5, 0.0, 1.0)</code> builds a bundle of four numbers: red 1.0, green 0.5, blue 0.0, alpha 1.0. That's orange.</li>
+<li><code>=</code> stores it into <code>fragColor</code>. In code, <code>=</code> means “put the right side into the left side”, not “is equal to”.</li>
+<li>The semicolon <code>;</code> ends the instruction. GLSL needs one after every instruction, and forgetting one is the most common error there is.</li>
+</ul>
+<p>That's the whole thing. The language is called <b>GLSL</b>, the OpenGL Shading Language. It looks a lot like C or JavaScript, with some rules of its own that Chapter 2 covers.</p>
+<div class="try" title="Try it in the workbench">
+<p>Change the four numbers in the workbench on the right. Make the canvas yellow, then a dark blue, then grey. Tip: click on a number and a slider appears above the code; drag it and watch the canvas.</p>
+<details><summary>Hint</summary><div><p>Use the color table above. Dark blue is a little blue and nothing else, such as <code>vec4(0.0, 0.0, 0.4, 1.0)</code>.</p></div></details>
+</div>
+
+<h2 id="position">Using where you are</h2>
+<p>A flat color is boring because every pixel ignores its input. Let's use it. The canvas has a width in pixels, which the runner provides as <code>iResolution.x</code>. If a pixel divides its own x position by the width, it gets a number that is 0 at the left edge and 1 at the right edge:</p>
+<script type="text/x-glsl" data-ex="first-ramp" data-title="Each pixel uses its own position">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    // fragCoord.x is this pixel's x position, in pixels.
+    // iResolution.x is the width of the canvas, in pixels.
+    float red = fragCoord.x / iResolution.x;   // 0 at the left edge, 1 at the right
+
+    fragColor = vec4(red, 0.0, 0.0, 1.0);
+}
+</script>
+<p>Three new things appeared:</p>
+<ul>
+<li><code>fragCoord.x</code> reads just the x out of the two-number bundle. <code>.y</code> would read the y.</li>
+<li><code>float red = …;</code> makes a new variable. <code>float</code> is the type for a single decimal number, and <code>red</code> is a name we chose. From here on, <code>red</code> holds the result of the division.</li>
+<li>Lines starting with <code>//</code> are comments: notes for humans. The computer skips them.</li>
+</ul>
+<aside class="math" title="Math from zero: dividing to get a fraction">
+<p>Say the canvas is 800 pixels wide. A pixel near the left at x = 0.5 computes 0.5 / 800 ≈ 0.0006, almost no red. A pixel in the middle at x = 400.5 gets about 0.5, half red. A pixel at the right edge, x = 799.5, gets about 0.999, full red. Dividing a position by the total length always turns it into a fraction of the way across, between 0 and 1, whatever the canvas size. That's why you'll divide by <code>iResolution</code> all the time.</p>
+</aside>
+<p>Now each pixel gives a slightly different answer, and together they form a smooth ramp. Nobody drew a gradient. Every pixel just turned its own position into a brightness.</p>
+<details class="predict"><summary>If you put the same idea in the green slot, using y instead of x, what will the canvas look like? Which corner will be yellow?</summary>
+<div><p>Red grows to the right, green grows upward, so the bottom-left corner is black (no red, no green), the bottom-right is red, the top-left is green, and the top-right is yellow, because full red plus full green light makes yellow. Here it is:</p></div></details>
+<script type="text/x-glsl" data-ex="both-ramps" data-title="Position as color, in both directions">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    float red   = fragCoord.x / iResolution.x;   // left 0 → right 1
+    float green = fragCoord.y / iResolution.y;   // bottom 0 → top 1
+
+    fragColor = vec4(red, green, 0.0, 1.0);
+}
+</script>
+<p>Notice that y grows <em>upward</em>: green is strongest at the top. That's the opposite of p5.js, where y grows downward. Shaders put (0, 0) at the bottom-left corner. Chapter 3 is all about coordinates.</p>
+<aside class="aha"><p>A position is two numbers and a color is three numbers, so a position can <em>be</em> a color. Turning numbers into colors is also how you'll debug every shader you ever write.</p></aside>
+
+<h2 id="clamping">Numbers outside 0 to 1</h2>
+<p>What if a color number goes above 1.0 or below 0.0? Nothing breaks. When the screen shows the pixel, anything above 1.0 is shown as 1.0 and anything below 0.0 is shown as 0.0. This is called <b>clamping</b>.</p>
+<script type="text/x-glsl" data-ex="clamped" data-title="Brightness past 1.0 just stays at full">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    // Divide by 200 instead of the width: past 200 pixels this goes above 1.0.
+    float red = fragCoord.x / 200.0;
+
+    fragColor = vec4(red, 0.0, 0.0, 1.0);
+}
+</script>
+<p>The ramp reaches full red 200 pixels from the left edge and stays there. The numbers keep growing (2.0, 3.0, …) but the screen can't show more than “fully on”. Negative numbers would all look black in the same way. Keep this in mind: when part of your canvas is flat black or flat white, the real numbers there may be much smaller or larger than you think.</p>
+<aside class="note" title="Pixels on this screen"><p>On high-density (“retina”) screens, the canvas has more pixels than its size on the page suggests, often twice as many in each direction. fragCoord counts real pixels, so 200 of them can look like a short distance. That's exactly why dividing by <code>iResolution</code> is the habit to build: it works on any screen.</p></aside>
+
+<h2 id="mistakes">Breaking it on purpose</h2>
+<p>You'll make mistakes, so it's worth seeing what they look like while nothing is at stake. In the workbench, delete the semicolon at the end of the <code>fragColor</code> line. Three things happen:</p>
+<ol>
+<li>The line with the problem gets a red band in the editor.</li>
+<li>A box under the editor explains the error in plain words, with the compiler's original message underneath.</li>
+<li>The canvas keeps showing the last version that worked, so you never lose the picture while you fix things.</li>
+</ol>
+<p>The message will say something like <code>syntax error</code>. Compilers often notice a missing semicolon on the line <em>after</em> the real mistake, because that's where they realise something's wrong. Put the semicolon back and the error disappears. Chapter 19 covers debugging in depth, and the reference has an <a href="../reference.html#g-errors">error decoder</a>.</p>
+
+<h2 id="uniforms">Where iResolution and friends come from</h2>
+<p>You used <code>iResolution</code> without declaring it. Where does it come from? The runner provides it. Before every frame, the runner sets a handful of values that every pixel can read. They're called <b>uniforms</b>, because they're uniform: exactly the same for every pixel in a frame.</p>
+<table>
+<thead><tr><th>name</th><th>type</th><th>what it holds</th><th>explained in</th></tr></thead>
+<tbody>
+<tr><td><code>iResolution</code></td><td><code>vec3</code></td><td>the canvas width and height in pixels</td><td>Chapter 3</td></tr>
+<tr><td><code>iTime</code></td><td><code>float</code></td><td>seconds since the shader started</td><td>Chapter 5</td></tr>
+<tr><td><code>iMouse</code></td><td><code>vec4</code></td><td>where the mouse is while you drag</td><td>Chapter 3</td></tr>
+<tr><td><code>iFrame</code></td><td><code>int</code></td><td>which frame this is: 0, 1, 2…</td><td>Chapter 15</td></tr>
+<tr><td><code>iChannel0</code></td><td><code>sampler2D</code></td><td>an image to read, like a previous frame or sound</td><td>Chapters 15 and 16</td></tr>
+</tbody>
+</table>
+<p>These names, and the name <code>mainImage</code>, aren't part of GLSL itself. They come from <a href="https://www.shadertoy.com/" target="_blank" rel="noopener">Shadertoy</a>, the website where many shader artists share their work, and this course follows the same convention so that everything you write here can be pasted into Shadertoy unchanged. In Chapter 18 you'll write a runner yourself, in about 100 lines of JavaScript, and see exactly how these values get into your shader. Hover any of these names in the workbench to see a short explanation.</p>
+
+<section class="summary">
+<h2>What you now know</h2>
+<ul>
+<li>A screen is a grid of pixels. Each pixel is a red, a green and a blue light, so a color is three numbers, each from 0.0 to 1.0.</li>
+<li>Light adds up: red + green = yellow, all three = white.</li>
+<li>A fragment shader is a function that the GPU runs once per pixel, all at the same time, to decide each pixel's color.</li>
+<li><code>mainImage</code> receives <code>fragCoord</code> (this pixel's position, in pixels, from the bottom-left) and must fill in <code>fragColor</code> (red, green, blue, alpha).</li>
+<li>Dividing a position by <code>iResolution</code> turns it into a fraction from 0 to 1.</li>
+<li>Colors outside 0 to 1 are clamped when shown.</li>
+<li>Uniforms like <code>iTime</code> and <code>iResolution</code> are provided by the runner and are the same for every pixel.</li>
+</ul>
+</section>
+
+<div class="try" title="Exercises">
+<p><b>1.</b> Make a ramp that goes from black on the left to white on the right.</p>
+<details><summary>Hint</summary><div><p>White is equal amounts of all three. Put the same number in red, green and blue.</p></div></details>
+<details><summary>Solution</summary><div><script type="text/x-glsl-snippet">
+float v = fragCoord.x / iResolution.x;
+fragColor = vec4(v, v, v, 1.0);
+</script></div></details>
+<p><b>2.</b> Make the ramp go the other way: white on the left, black on the right.</p>
+<details><summary>Hint</summary><div><p>If v goes from 0 to 1, what goes from 1 to 0? Try <code>1.0 - v</code>.</p></div></details>
+<p><b>3.</b> Make a blue ramp from the bottom (dark) to the top (bright), with a constant half red everywhere. What color is the top?</p>
+<details><summary>Solution</summary><div><script type="text/x-glsl-snippet">
+float b = fragCoord.y / iResolution.y;
+fragColor = vec4(0.5, 0.0, b, 1.0);   // the top is purple: half red + full blue
+</script></div></details>
+</div>
+<p><b>Go deeper:</b> <a href="https://thebookofshaders.com/01/" target="_blank" rel="noopener">The Book of Shaders, chapters 1 and 2</a> tell the same story with different pictures.</p>

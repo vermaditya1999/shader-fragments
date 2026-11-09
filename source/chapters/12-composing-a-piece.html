@@ -1,0 +1,261 @@
+<!--meta
+{"num": 12, "slug": "composing-a-piece", "part": 2, "title": "Composing a piece", "summary": "A famous recipe built step by step and dissected line by line, how to explore variations, finishing touches, seamless loops and exporting.", "hero": "first-piece", "start": "first-piece", "thumbTime": 0.6}
+-->
+<p class="lede">Part I gave you the parts: coordinates, waves, color, distance, transforms, repetition and noise. Part II is about making things with them. This chapter builds one well-known piece of shader art step by step until every line makes sense, then shows how to make it your own, finish it, loop it and get it out into the world.</p>
+
+<h2 id="layers">A piece is a stack of simple layers</h2>
+<p>Most shader art that looks complicated follows the same shape, and each layer is something from Part I:</p>
+<ol>
+<li><b>Coordinates</b>: set up the space, maybe transform or fold it (Chapters 3, 9, 10).</li>
+<li><b>Structure</b>: a distance, a pattern or a noise value that decides the forms (Chapters 7, 8, 11).</li>
+<li><b>Color</b>: turn numbers into color, usually with a palette (Chapter 6).</li>
+<li><b>Light</b>: glows and shading, added together (Chapters 6, 7, 8).</li>
+<li><b>Finish</b>: tone mapping, vignette, grain (this chapter).</li>
+</ol>
+<p>When you read someone else's shader, look for these layers. When you write your own, build them in this order, checking the picture after each one.</p>
+
+<h2 id="build">Building a piece, step by step</h2>
+<p>The piece below comes from kishimisu's excellent video <a href="https://www.youtube.com/watch?v=f4s1h2YETNY" target="_blank" rel="noopener">An introduction to Shader Art Coding</a>. It's a good first piece because it's short, it looks rich, and it uses almost everything from Part I. Let's build it in three steps.</p>
+<h3>Step 1: rings and glow</h3>
+<script type="text/x-glsl" data-ex="step-rings" data-title="Step 1: rings around the center, made to glow">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;   // Chapter 3
+
+    float d = length(uv);                 // distance from the center (Chapter 7)
+    d = sin(d * 8.0 + iTime) / 8.0;       // ripples: a wave travelling through the distance (Chapter 5)
+    d = abs(d);                           // distance to the nearest ripple (Chapter 8)
+    d = 0.02 / d;                         // glow: very bright near each ripple (Chapter 8)
+
+    fragColor = vec4(vec3(d), 1.0);
+}
+</script>
+<p>Why <code>sin(d * 8.0) / 8.0</code> and not just <code>sin(d * 8.0)</code>? Near each place where the sine crosses zero, it's almost a straight line with slope 8. Dividing by 8 makes the slope 1, so near each ring the value grows exactly like a distance does. It's a cheap distance field for an infinite set of rings, which is why the glow in the next line has the same width on every ring.</p>
+
+<h3>Step 2: repeat space, color by the original position</h3>
+<script type="text/x-glsl" data-ex="step-repeat" data-title="Step 2: repetition, a fade and a palette">
+vec3 palette(float t) {                        // Chapter 6
+    vec3 a = vec3(0.5, 0.5, 0.5);
+    vec3 b = vec3(0.5, 0.5, 0.5);
+    vec3 c = vec3(1.0, 1.0, 1.0);
+    vec3 d = vec3(0.263, 0.416, 0.557);
+    return a + b * cos(6.28318 * (c * t + d));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    vec2 uv0 = uv;                             // remember where this pixel started
+
+    uv = fract(uv * 2.0) - 0.5;                // repeat space (Chapter 10)
+
+    float d = length(uv) * exp(-length(uv0));  // rings in each tile, shrinking toward the edges
+    vec3 col = palette(length(uv0) + iTime * 0.4);   // color by the ORIGINAL distance
+
+    d = sin(d * 8.0 + iTime) / 8.0;
+    d = abs(d);
+    d = 0.02 / d;
+
+    fragColor = vec4(col * d, 1.0);
+}
+</script>
+<p>Two new ideas here:</p>
+<ul>
+<li><b>Keeping uv0.</b> After <code>fract</code>, every tile has the same local coordinates, so anything computed from <code>uv</code> repeats identically. <code>uv0</code> still knows where the pixel is on the whole canvas, so using it for color (and for the fade) makes the picture vary across the tiles. Local coordinates for the shape, global ones for variation: you'll use this pattern constantly.</li>
+<li><b>exp(−length(uv0))</b> is 1 at the center and shrinks smoothly outward (Chapter 4's exponential decay). Multiplying the distance by it makes the rings in outer tiles look smaller and denser, which pulls the eye to the middle.</li>
+</ul>
+
+<h3>Step 3: a loop of layers</h3>
+<script type="text/x-glsl" data-ex="first-piece" data-title="Step 3: four layers, each folding the last">
+// After kishimisu's "An introduction to Shader Art Coding".
+
+vec3 palette(float t) {                                  // Chapter 6
+    vec3 a = vec3(0.5, 0.5, 0.5);
+    vec3 b = vec3(0.5, 0.5, 0.5);
+    vec3 c = vec3(1.0, 1.0, 1.0);
+    vec3 d = vec3(0.263, 0.416, 0.557);
+    return a + b * cos(6.28318 * (c * t + d));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;   // Chapter 3
+    vec2 uv0 = uv;                          // where this pixel started
+    vec3 finalColor = vec3(0.0);
+
+    for (float i = 0.0; i < 4.0; i++) {
+        uv = fract(uv * 1.5) - 0.5;         // repeat the space left by the last layer (Chapter 10)
+
+        float d = length(uv) * exp(-length(uv0));                 // distance, fading outward
+        vec3 col = palette(length(uv0) + i * 0.4 + iTime * 0.4);  // each layer a bit further along
+
+        d = sin(d * 8.0 + iTime) / 8.0;     // ripples (Chapter 5)
+        d = abs(d);
+        d = pow(0.01 / d, 1.2);             // glow, with extra contrast (Chapter 8)
+
+        finalColor += col * d;              // light adds up (Chapter 6)
+    }
+
+    fragColor = vec4(finalColor, 1.0);
+}
+</script>
+<p>The loop is the only new thing, and it's what makes the piece rich:</p>
+<ul>
+<li><code>uv = fract(uv * 1.5) - 0.5</code> runs four times, and each time it starts from the <em>previous</em> uv, which was already repeated. So the second layer repeats tiles inside tiles, the third repeats those, and so on. Detail nests inside detail, a cousin of the fractals from Chapter 11.</li>
+<li>Each layer adds its own glow to <code>finalColor</code>. Light adds, so overlapping layers get brighter.</li>
+<li><code>i * 0.4</code> shifts each layer's color along the palette, so the layers are distinguishable.</li>
+<li><code>pow(0.01 / d, 1.2)</code> is a glow like Step 1's, with the power making bright parts brighter and dim parts dimmer, so the lines look crisper.</li>
+</ul>
+<details class="predict"><summary>Change the loop's <code>4.0</code> to 1.0, then 2.0, then 3.0. What does each extra layer add?</summary>
+<div><p>One layer is a grid of ripples, Step 2 in a different scale. Each additional layer folds the already-folded space again, smaller and shifted (because of the 1.5 and the −0.5), so new patterns appear inside the old ones and the overlaps get brighter.</p></div></details>
+<aside class="aha"><p>Complicated-looking art is simple ideas stacked. You can now read every line of this piece, and you know which number to poke to change what.</p></aside>
+
+<h2 id="explore">Making it yours: how to explore</h2>
+<p>A working piece is a starting point, not an end. The fastest way to find something you love is to make many small changes and keep the ones that surprise you. Some moves reliably open up new territory:</p>
+<ul>
+<li><b>Change one number at a time</b> and watch what it controls. Click a number in the workbench and drag the slider: <code>1.5</code>, <code>8.0</code> and the palette's <code>d</code> are the big ones here.</li>
+<li><b>Swap the distance</b>: <code>length(uv)</code> for the square distance <code>max(abs(uv.x), abs(uv.y))</code> or the diamond <code>abs(uv.x) + abs(uv.y)</code> (Chapter 7).</li>
+<li><b>Fold or turn space</b> inside the loop: <code>uv = abs(uv)</code> or a rotation (Chapters 9 and 10).</li>
+<li><b>Swap a function</b>: sin for a triangle wave, <code>abs</code> for <code>fract</code>.</li>
+<li><b>Feed a value somewhere new</b>: use <code>uv0</code> or <code>i</code> or <code>iTime</code> in a line that doesn't have it yet.</li>
+<li><b>Change the palette</b>, or tone map so bright overlaps glow instead of clipping (Chapter 6).</li>
+</ul>
+<p>Here are four of those moves applied to the piece above. It's recognizably related, and also a different piece:</p>
+<script type="text/x-glsl" data-ex="variation" data-title="A variation: fold, turn, square distance, tone mapping">
+mat2 rot(float a) {                        // rot(a) * p turns p by a (Chapter 9)
+    float c = cos(a), s = sin(a);
+    return mat2(c, s, -s, c);
+}
+
+vec3 palette(float t) {
+    vec3 a = vec3(0.5, 0.5, 0.5);
+    vec3 b = vec3(0.5, 0.5, 0.5);
+    vec3 c = vec3(1.0, 1.0, 0.5);
+    vec3 d = vec3(0.80, 0.90, 0.30);       // a warmer palette
+    return a + b * cos(6.28318 * (c * t + d));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    vec2 uv0 = uv;
+    vec3 finalColor = vec3(0.0);
+
+    for (float i = 0.0; i < 4.0; i++) {
+        uv = abs(uv);                                   // NEW: mirror (Chapter 10)
+        uv = rot(iTime * 0.1 + i * 0.7) * uv;           // NEW: turn each layer differently
+        uv = fract(uv * 1.4) - 0.5;
+
+        float d = max(abs(uv.x), abs(uv.y)) * exp(-length(uv0));   // NEW: square distance
+        vec3 col = palette(length(uv0) + i * 0.3 + iTime * 0.3);
+
+        d = sin(d * 10.0 + iTime) / 10.0;
+        d = abs(d);
+        d = pow(0.008 / d, 1.3);
+
+        finalColor += col * d;
+    }
+    finalColor = 1.0 - exp(-finalColor);                // NEW: tone map (Chapter 6)
+    fragColor = vec4(finalColor, 1.0);
+}
+</script>
+<p>A habit that helps: whenever a change makes you go "oh!", export a PNG before you change anything else. A folder of these snapshots becomes a sketchbook, and it's often the third or fourth variation that's the keeper.</p>
+
+<h2 id="finishing">Finishing touches</h2>
+<p>A few cheap effects at the very end make a picture feel finished and less "computer-y". They work on almost any piece:</p>
+<ul>
+<li><b>Tone mapping</b>, <code>1.0 - exp(-col)</code>: bright overlaps glow instead of clipping (Chapter 6).</li>
+<li><b>Vignette</b>: darken toward the edges, which frames the picture and pulls the eye inward.</li>
+<li><b>Grain</b>: a tiny bit of per-pixel random noise, re-rolled every frame (Chapter 11's hash). It hides banding in smooth gradients and adds texture.</li>
+<li><b>Chromatic aberration</b>: real lenses bend red, green and blue light slightly differently, so colors fringe near the edges. Fake it by computing the picture three times at slightly different scales and taking one channel from each. That needs the picture as a function you can call, which is a useful habit anyway.</li>
+</ul>
+<script type="text/x-glsl" data-ex="finishing" data-title="Raw (left) and finished (right): aberration, tone map, vignette, grain">
+vec3 palette(float t) {
+    return 0.5 + 0.5 * cos(6.28318 * (t + vec3(0.263, 0.416, 0.557)));
+}
+
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+// The piece, as a function of position, so it can be computed more than once.
+vec3 scene(vec2 uv) {
+    float a = atan(uv.y, uv.x);
+    float d = abs(length(uv) - 0.55 - 0.06 * sin(a * 6.0 + iTime));   // a wobbly ring
+    d = min(d, abs(length(uv) - 0.25));                                 // and a small one
+    return palette(length(uv) * 0.6 + iTime * 0.1) * 0.035 / d;         // glowing
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    vec3 col = scene(uv);
+
+    if (fragCoord.x > iResolution.x * 0.5) {
+        // 1. chromatic aberration: red sampled a little bigger, blue a little smaller
+        col = vec3(scene(uv * 0.985).r, scene(uv).g, scene(uv * 1.015).b);
+        // 2. tone map
+        col = 1.0 - exp(-col);
+        // 3. vignette: 1 in the middle, darker toward the corners
+        col *= 1.0 - 0.6 * smoothstep(0.5, 2.0, length(uv));
+        // 4. grain: a little noise, different every frame
+        col += (hash(fragCoord + fract(iTime) * 97.0) - 0.5) * 0.05;
+    }
+    if (abs(fragCoord.x - iResolution.x * 0.5) < 1.0) col = vec3(0.4);   // the dividing line
+    fragColor = vec4(col, 1.0);
+}
+</script>
+<p>Look at the two halves of the big ring: the raw side clips to flat white where the glow is strong, while the finished side rolls off smoothly, has faint colored fringes, and sits in a gently darkened frame. None of it is noticeable on its own, which is the point.</p>
+
+<h2 id="loops">Seamless loops</h2>
+<p>Animations get shared as short looping videos. A loop is seamless when the last frame flows straight into the first. The rule is simple: everything that moves must be back where it started at the end of the period. Measure time as a fraction of the loop, <code>t = fract(iTime / period)</code>, turn it into an angle, and only use sines and cosines of <em>whole-number multiples</em> of that angle:</p>
+<script type="text/x-glsl" data-ex="loop" data-title="A perfect 6-second loop">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    float period = 6.0;                        // seconds per loop
+    float t = fract(iTime / period);           // 0 → 1 over one loop, then starts again
+    float a = t * 6.28318;                     // the same as an angle: one full turn per loop
+
+    vec3 col = vec3(0.06, 0.05, 0.09);
+    for (int i = 0; i < 12; i++) {
+        float fi = float(i) / 12.0;
+        float ang = fi * 6.28318 + a;                    // the ring turns exactly once per loop
+        float wave = sin(2.0 * a - fi * 6.28318 * 3.0);  // two whole waves per loop
+        vec2 c = (0.55 + 0.15 * wave) * vec2(cos(ang), sin(ang));
+        float d = length(uv - c) - (0.06 + 0.03 * wave);
+        vec3 ink = 0.5 + 0.5 * cos(6.28318 * (fi + vec3(0.0, 0.33, 0.67)));
+        col = mix(col, ink, 1.0 - smoothstep(-px, px, d));
+    }
+    fragColor = vec4(col, 1.0);
+}
+</script>
+<p>Try changing <code>2.0 * a</code> to <code>2.5 * a</code> and watch for the hiccup every 6 seconds: half a wave is left over when the loop restarts. The workbench's clip export records 6 seconds, so a 6-second period fits it neatly.</p>
+
+<h2 id="share">Getting it out into the world</h2>
+<p>The <b>Export</b> menu under the workbench canvas has everything you need:</p>
+<ul>
+<li><b>Save PNG</b> saves the frame on screen; <b>Save PNG, 1920 × 1080</b> renders a fresh full-HD frame, good for wallpapers and posts.</li>
+<li><b>Record a 6-second clip</b> saves a video, ready to post.</li>
+<li><b>Copy for Shadertoy</b> copies code that runs on <a href="https://www.shadertoy.com/new" target="_blank" rel="noopener">shadertoy.com/new</a> unchanged, since this course uses Shadertoy's conventions.</li>
+<li><b>Copy as p5.js sketch</b> wraps the shader in a complete sketch for the p5.js editor (Chapter 20 explains how).</li>
+</ul>
+<p>Nothing in the workbench is saved, so copy or export anything you want to keep. Then post it somewhere people react to visual work: Shadertoy, Instagram, Bluesky, Mastodon or a Discord server, with tags like #shader, #glsl and #creativecoding. Other people's reactions are good fuel, and shader people are a generous crowd.</p>
+
+<section class="summary">
+<h2>What you now know</h2>
+<ul>
+<li>A piece is layers: coordinates, structure, color, light, finish.</li>
+<li><code>sin(d * k) / k</code> works like a distance to infinitely many rings.</li>
+<li>Keep the original coordinates (<code>uv0</code>) for variation across repeated space.</li>
+<li>A loop that refolds the previous layer's space nests detail inside detail.</li>
+<li>Explore by changing one thing at a time: numbers, distances, folds, functions, inputs, palettes.</li>
+<li>Finish with tone mapping, vignette, grain and maybe chromatic aberration.</li>
+<li>Seamless loops use whole-number multiples of <code>fract(iTime / period) * 6.28318</code>.</li>
+</ul>
+</section>
+
+<div class="try" title="Exercises">
+<p><b>1.</b> Make three variations of <code>first-piece</code> that you'd be happy to show someone. Export a PNG of each.</p>
+<p><b>2.</b> Add the four finishing touches to your favorite variation. (Hint: wrap the loop in a function <code>vec3 scene(vec2 uv)</code> first.)</p>
+<p><b>3.</b> Turn <code>first-piece</code> into a seamless 6-second loop. Which uses of <code>iTime</code> need to change?</p>
+<details><summary>Hint</summary><div><p>Every <code>iTime</code> inside a sine is fine if its multiple of the loop angle is whole: replace <code>iTime</code> with <code>a</code> (or <code>2.0 * a</code>) inside <code>sin</code>, and in the palette use <code>t</code>, since the palette repeats every 1.0 of its input.</p></div></details>
+<p><b>4.</b> Post one piece somewhere. That's the whole exercise.</p>
+</div>
+<p><b>Go deeper:</b> <a href="https://www.youtube.com/watch?v=f4s1h2YETNY" target="_blank" rel="noopener">kishimisu's video</a>, which builds this exact piece in about 20 minutes, and <a href="https://www.shadertoy.com/" target="_blank" rel="noopener">Shadertoy</a>, where you can open any shader and read its code.</p>

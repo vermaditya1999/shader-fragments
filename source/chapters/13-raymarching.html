@@ -1,0 +1,356 @@
+<!--meta
+{"num": 13, "slug": "raymarching", "part": 2, "title": "3D from nothing: raymarching", "summary": "A camera made of rays, 3D distance functions, sphere tracing, surface normals from finite differences, and lighting from dot products.", "hero": "lit-scene", "start": "first-hit"}
+-->
+<p class="lede">There are no triangles, meshes or 3D engines in this chapter. A whole 3D scene will be one distance function, like the ones from Chapter 8 but with a z, plus a loop that walks a ray into the scene for every pixel. By the end, you'll have lit, shaded objects standing on a floor, and you'll know what every line does.</p>
+
+<h2 id="third">Adding a dimension</h2>
+<p>Everything from Part I extends to 3D by adding a third number. A position is now a <code>vec3</code>: x to the right, y up, and z going <em>into</em> the screen, away from you. Lengths, distances, normalize and the dot product work exactly the same (Chapter 7), and so do signed distance functions:</p>
+<script type="text/x-glsl-snippet">
+float sdSphere(vec3 p, float r) {         // a ball: distance to the center, minus the radius
+    return length(p) - r;
+}
+
+float sdBox(vec3 p, vec3 b) {             // Chapter 8's box, with one more axis
+    vec3 q = abs(p) - b;
+    return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0);
+}
+
+float sdGround(vec3 p, float h) {         // a flat floor at height h: just how far above it you are
+    return p.y - h;
+}
+</script>
+<p>Combine them with <code>min</code>, <code>max</code> and <code>smin</code> as before. The whole scene is one function, traditionally called <code>map</code>, that answers: "from this point in space, how far is the nearest surface?"</p>
+
+<h2 id="rays">A ray for every pixel</h2>
+<p>A camera is a point, the eye, looking through a window: the screen. Every pixel is a tiny pane in that window. To find what a pixel sees, shoot a <b>ray</b> from the eye through the pixel's pane and out into the scene; whatever surface the ray hits first is what that pixel shows.</p>
+<figure class="diagram">
+<svg viewBox="0 0 540 220" role="img" aria-label="Side view of a pinhole camera: rays leave the eye, pass through the screen at distance f, and one of them hits a sphere.">
+  <g fill="none" stroke="currentColor">
+    <path d="M40 110 L213 0 M40 110 L213 220 M40 110 L530 110" stroke-opacity=".25" stroke-dasharray="4 5"/>
+    <path d="M150 40 V180" stroke-width="3"/>
+    <circle cx="400" cy="70" r="40" stroke-width="2"/>
+    <path d="M40 110 L359 66" stroke="#f2a33a" stroke-width="2.5"/>
+    <path d="M40 196 H150" stroke-opacity=".7"/><path d="M40 190 v12 M150 190 v12" stroke-opacity=".7"/>
+  </g>
+  <g fill="currentColor" font-family="ui-monospace, monospace" font-size="13">
+    <circle cx="40" cy="110" r="5"/>
+    <circle cx="150" cy="95" r="4" fill="#d98a1e"/>
+    <circle cx="359" cy="66" r="5" fill="#d98a1e"/>
+    <text x="14" y="134">eye (ro)</text>
+    <text x="120" y="30">screen</text>
+    <text x="158" y="44">uv.y = 1</text><text x="158" y="182">uv.y = −1</text>
+    <text x="84" y="214">f</text>
+    <text x="240" y="76" fill="#d98a1e">rd</text>
+    <text x="300" y="52">hit</text>
+    <text x="430" y="128">a sphere</text>
+  </g>
+</svg>
+<figcaption>Side view. The screen sits at distance f in front of the eye. Each pixel's ray starts at the eye and points through that pixel's spot on the screen.</figcaption>
+</figure>
+<p>In numbers: put the eye at a point called <code>ro</code> (ray origin). Put the screen a distance <code>f</code> in front of it. The pixel with centered coordinates <code>uv</code> (Chapter 3) sits on the screen at <code>(uv.x, uv.y, f)</code> relative to the eye, so the ray's direction is that arrow, normalized:</p>
+<script type="text/x-glsl-snippet">
+vec3 ro = vec3(0.0, 0.0, -3.0);           // the eye: 3 units back from the origin
+vec3 rd = normalize(vec3(uv, 1.5));       // ray direction through this pixel (f = 1.5)
+// every point on the ray:  ro + rd * t,  where t is how far along it you've gone
+</script>
+<p><code>f</code> is the <b>focal length</b>, and it sets the field of view. A small f puts the screen close to the eye, so the rays fan out wide: a wide-angle lens. A big f narrows the fan: a zoom lens. (Since uv spans −1..1 vertically, the vertical field of view is 2·atan(1/f): 90° for f = 1, about 67° for f = 1.5.)</p>
+<p>Here's every ray's direction shown as a color, x as red, y as green and z as blue. You're looking at the fan of rays leaving the camera:</p>
+<script type="text/x-glsl" data-ex="ray-dirs" data-title="The camera's rays, as colors">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+
+    float f = 1.5 + sin(iTime);              // focal length: watch the field of view change
+    vec3 rd = normalize(vec3(uv, f));        // this pixel's ray direction (length 1)
+
+    fragColor = vec4(rd * 0.5 + 0.5, 1.0);   // -1..1 shown as 0..1
+}
+</script>
+<p>In the middle, rays point straight ahead (0, 0, 1): mid-grey red and green, full blue. Toward the edges they lean outward. As f shrinks the colors at the edges get stronger: the rays fan out wider.</p>
+
+<h2 id="marching">Walking the ray: sphere tracing</h2>
+<p>Now the key question: where along the ray is the first surface? For a single sphere you could solve an equation. For a scene made of dozens of distance functions combined with min and smin, you can't. But the distance function itself offers a promise you met in Chapter 8's probe circle: <em>nothing is closer than this distance</em>. So:</p>
+<ol>
+<li>Start at the eye, with t = 0.</li>
+<li>Ask <code>map</code> for the distance d at the current point.</li>
+<li>Nothing is within d in any direction, so it's safe to move d along the ray. Do it: t += d.</li>
+<li>Repeat. If d gets tiny, you're touching a surface: a hit. If t gets huge, the ray has escaped into the sky.</li>
+</ol>
+<div data-widget="raymarch"></div>
+<p>This is called <b>sphere tracing</b> or <b>raymarching</b>, because each step is the radius of a sphere that's guaranteed to be empty. In open space the steps are big; near a surface they shrink, so the ray never overshoots. In code it's a short loop:</p>
+<script type="text/x-glsl-snippet">
+float march(vec3 ro, vec3 rd) {
+    float t = 0.0;
+    for (int i = 0; i < 100; i++) {
+        vec3 p = ro + rd * t;           // where we are along the ray
+        float d = map(p);               // how far to the nearest surface from here
+        if (d < 0.001) return t;        // close enough: a hit, t units from the eye
+        t += d;                         // safe to move this far
+        if (t > 20.0) break;            // too far: nothing out there
+    }
+    return -1.0;                        // missed (or ran out of steps)
+}
+</script>
+<p>Put the pieces together for a single sphere. Each pixel is white if its ray hits something:</p>
+<script type="text/x-glsl" data-ex="first-hit" data-title="The first raymarcher: did the ray hit anything?">
+float map(vec3 p) {
+    return length(p) - 1.0;                 // a sphere of radius 1 at the origin
+}
+
+float march(vec3 ro, vec3 rd) {
+    float t = 0.0;
+    for (int i = 0; i < 100; i++) {
+        vec3 p = ro + rd * t;
+        float d = map(p);
+        if (d < 0.001) return t;
+        t += d;
+        if (t > 20.0) break;
+    }
+    return -1.0;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+
+    vec3 ro = vec3(0.0, 0.0, -3.0);         // the eye, 3 units in front of the sphere
+    vec3 rd = normalize(vec3(uv, 1.5));     // this pixel's ray
+
+    float t = march(ro, rd);
+    vec3 col = t > 0.0 ? vec3(1.0) : vec3(0.0);   // hit: white, miss: black
+
+    fragColor = vec4(col, 1.0);
+}
+</script>
+<p>A white disc. Underwhelming? It's the correct answer: a sphere seen from the front <em>is</em> a disc. What makes things look 3D is light, and for light, each pixel needs to know more than "hit or not". A first step: how far away is the hit? Use t as brightness, nearer being brighter:</p>
+<script type="text/x-glsl" data-ex="depth" data-title="Depth: brighter means nearer">
+float sdBox(vec3 p, vec3 b) {
+    vec3 q = abs(p) - b;
+    return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0);
+}
+
+float map(vec3 p) {
+    float sphere = length(p - vec3(-1.0, 0.0, 0.0)) - 1.0;
+    float box = sdBox(p - vec3(1.3, -0.4, 0.5), vec3(0.6));
+    float ground = p.y + 1.0;                       // a floor at y = -1
+    return min(min(sphere, box), ground);           // union of all three (Chapter 8)
+}
+
+float march(vec3 ro, vec3 rd) {
+    float t = 0.0;
+    for (int i = 0; i < 100; i++) {
+        float d = map(ro + rd * t);
+        if (d < 0.001) return t;
+        t += d;
+        if (t > 20.0) break;
+    }
+    return -1.0;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    vec3 ro = vec3(0.0, 0.5, -4.0);                 // a little up and back
+    vec3 rd = normalize(vec3(uv, 1.5));
+
+    float t = march(ro, rd);
+    vec3 col = vec3(0.0);
+    if (t > 0.0) col = vec3(1.0 - t / 10.0);        // 1 right at the eye, 0 at 10 units away
+
+    fragColor = vec4(col, 1.0);
+}
+</script>
+<p>Now there's a floor receding into the distance and two objects in front of it. Depth gives a sense of space, but the objects still look flat. For that you need to know which way their surfaces face.</p>
+<p>One more view before moving on. This one colors each pixel by how many steps its ray took. It's a debugging view, and it shows something surprising:</p>
+<script type="text/x-glsl" data-ex="steps" data-title="Cost: how many steps each ray took (dark = few, bright = many)">
+float map(vec3 p) {
+    float sphere = length(p - vec3(-1.0, 0.0, 0.0)) - 1.0;
+    float sphere2 = length(p - vec3(1.3, -0.3, 0.5)) - 0.7;
+    float ground = p.y + 1.0;
+    return min(min(sphere, sphere2), ground);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    vec3 ro = vec3(0.0, 0.5, -4.0);
+    vec3 rd = normalize(vec3(uv, 1.5));
+
+    float t = 0.0, steps = 0.0;
+    for (int i = 0; i < 100; i++) {
+        float d = map(ro + rd * t);
+        if (d < 0.001 || t > 20.0) break;
+        t += d;
+        steps += 1.0;
+    }
+    float heat = steps / 100.0;                     // 0..1
+    vec3 col = vec3(heat * 3.0, heat * 1.5, heat * 0.6);   // black → orange → white
+    fragColor = vec4(col, 1.0);
+}
+</script>
+<p>Rays that hit a surface head-on finish in a few steps. Rays that <em>skim past</em> an edge take the most, because they stay close to a surface for a long time and every step is tiny. The sky near the horizon is expensive too: those rays run almost parallel to the floor. This is why raymarchers set a step limit, and it's what to look at when a scene runs slowly (Chapter 19). A ray that runs out of steps before reaching anything counts as a miss: that's what the few dark specks along the sphere's lower edge in the depth view are.</p>
+
+<h2 id="normals">Which way does the surface face? Normals</h2>
+<p>Chapter 7 lit a ball with <code>dot(normal, light)</code>, where the normal is the direction a surface faces. For a ball the normal was easy. For an arbitrary scene, the distance function knows it, and here's how to ask.</p>
+<p>Stand at a point on a surface and take a tiny step in some direction. If you step straight away from the surface, the distance grows as fast as possible: by exactly the length of the step. Step along the surface, and the distance doesn't change. So "the direction in which the distance grows fastest" is the direction pointing straight out of the surface: the normal. Mathematicians call that direction the <b>gradient</b>.</p>
+<p>To measure it, nudge the point a tiny amount along x, y and z separately and see how much the distance changes each time:</p>
+<script type="text/x-glsl-snippet">
+vec3 calcNormal(vec3 p) {
+    vec2 e = vec2(0.001, 0.0);               // e.xyy = (0.001, 0, 0), e.yxy = (0, 0.001, 0), ...
+    return normalize(vec3(
+        map(p + e.xyy) - map(p - e.xyy),     // how much the distance changes along x
+        map(p + e.yxy) - map(p - e.yxy),     // ... along y
+        map(p + e.yyx) - map(p - e.yyx)));   // ... along z
+}
+</script>
+<p>Each line measures the change in distance across a tiny step in one direction, the way you'd measure the slope of a hill by checking the height a step to the left and a step to the right. Together the three changes form an arrow pointing uphill in distance, which is out of the surface. This trick is called <b>finite differences</b>, and the swizzles <code>e.xyy</code> and friends (Chapter 2) are just a compact way to write the three tiny steps.</p>
+<p>Coloring by the normal (x as red, y as green, z as blue) gives the classic rainbow look of a "normal map":</p>
+<script type="text/x-glsl" data-ex="normals" data-title="Surface normals, shown as colors">
+float sdBox(vec3 p, vec3 b) {
+    vec3 q = abs(p) - b;
+    return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0);
+}
+
+float map(vec3 p) {
+    float sphere = length(p - vec3(-1.0, 0.0, 0.0)) - 1.0;
+    float box = sdBox(p - vec3(1.3, -0.4, 0.5), vec3(0.6)) - 0.05;   // slightly rounded
+    float ground = p.y + 1.0;
+    return min(min(sphere, box), ground);
+}
+
+float march(vec3 ro, vec3 rd) {
+    float t = 0.0;
+    for (int i = 0; i < 100; i++) {
+        float d = map(ro + rd * t);
+        if (d < 0.001) return t;
+        t += d;
+        if (t > 20.0) break;
+    }
+    return -1.0;
+}
+
+vec3 calcNormal(vec3 p) {
+    vec2 e = vec2(0.001, 0.0);
+    return normalize(vec3(map(p + e.xyy) - map(p - e.xyy),
+                          map(p + e.yxy) - map(p - e.yxy),
+                          map(p + e.yyx) - map(p - e.yyx)));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    vec3 ro = vec3(0.0, 0.5, -4.0);
+    vec3 rd = normalize(vec3(uv, 1.5));
+
+    float t = march(ro, rd);
+    vec3 col = vec3(0.0);
+    if (t > 0.0) {
+        vec3 n = calcNormal(ro + rd * t);       // the surface's direction at the hit point
+        col = n * 0.5 + 0.5;                    // -1..1 shown as 0..1
+    }
+    fragColor = vec4(col, 1.0);
+}
+</script>
+<p>The floor is all one green: its normal is (0, 1, 0), straight up. The box's faces are flat colors, because each flat face points one way. The sphere shows every direction at once. The objects suddenly look solid, and there isn't a single light in the scene yet.</p>
+
+<h2 id="lighting">Light</h2>
+<p>Real lighting is complicated, but three simple ingredients get you most of the way. Each one is a dot product or close to it:</p>
+<ul>
+<li><b>Diffuse</b> (Chapter 7): a matte surface is as bright as it faces the light. <code>max(dot(n, lightDir), 0.0)</code>, where <code>lightDir</code> is the direction <em>toward</em> the light.</li>
+<li><b>Ambient</b>: in real life, light bounces around and the sky glows, so surfaces facing away from the sun aren't pitch black. A cheap stand-in: a dim bluish light that's strongest on surfaces facing up, <code>0.5 + 0.5 * n.y</code>.</li>
+<li><b>Specular</b>: shiny surfaces show a bright highlight where they reflect the light toward your eye. That happens where the normal points halfway between "toward the light" and "toward the eye". So compute that halfway direction <code>h = normalize(lightDir - rd)</code> (the direction toward the eye is <code>-rd</code>) and check how closely the normal matches it: <code>pow(max(dot(n, h), 0.0), 64.0)</code>. The power controls how tight the highlight is: higher looks glossier.</li>
+</ul>
+<p>Light math belongs in linear values, so the scene ends with Chapter 6's gamma correction. And to color objects differently, <code>map</code> returns two numbers: the distance and a <b>material id</b> saying which object is nearest:</p>
+<script type="text/x-glsl" data-ex="lit-scene" data-title="A lit scene: diffuse, ambient, specular and materials">
+mat2 rot(float a) {
+    float c = cos(a), s = sin(a);
+    return mat2(c, s, -s, c);
+}
+
+float sdBox(vec3 p, vec3 b) {
+    vec3 q = abs(p) - b;
+    return length(max(q, 0.0)) + min(max(q.x, max(q.y, q.z)), 0.0);
+}
+
+// The scene: returns (distance to the nearest surface, which material it is).
+vec2 map(vec3 p) {
+    vec2 res = vec2(p.y + 1.0, 0.0);                            // 0: the ground
+    float sphere = length(p - vec3(-1.1, 0.0, 0.0)) - 1.0;
+    if (sphere < res.x) res = vec2(sphere, 1.0);                // 1: the sphere
+    vec3 q = p - vec3(1.3, -0.35, 0.4);
+    q.xz = rot(iTime * 0.5) * q.xz;                             // spin the box around y (Chapter 9)
+    float box = sdBox(q, vec3(0.6)) - 0.05;
+    if (box < res.x) res = vec2(box, 2.0);                      // 2: the box
+    return res;
+}
+
+vec2 march(vec3 ro, vec3 rd) {
+    float t = 0.0;
+    for (int i = 0; i < 120; i++) {
+        vec2 h = map(ro + rd * t);
+        if (h.x < 0.001) return vec2(t, h.y);                   // hit: distance and material
+        t += h.x;
+        if (t > 30.0) break;
+    }
+    return vec2(-1.0);
+}
+
+vec3 calcNormal(vec3 p) {
+    vec2 e = vec2(0.001, 0.0);
+    return normalize(vec3(map(p + e.xyy).x - map(p - e.xyy).x,
+                          map(p + e.yxy).x - map(p - e.yxy).x,
+                          map(p + e.yyx).x - map(p - e.yyx).x));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    vec3 ro = vec3(0.0, 0.6, -4.5);
+    vec3 rd = normalize(vec3(uv, 1.6));
+
+    vec3 sky = mix(vec3(0.55, 0.65, 0.8), vec3(0.2, 0.3, 0.55), clamp(rd.y * 2.0, 0.0, 1.0));
+    vec3 col = sky;                                             // what misses see
+
+    vec2 hit = march(ro, rd);
+    if (hit.x > 0.0) {
+        vec3 p = ro + rd * hit.x;                               // the hit point
+        vec3 n = calcNormal(p);
+
+        vec3 albedo = vec3(0.6);                                // the surface's own color
+        if (hit.y == 0.0) albedo = vec3(0.35) + 0.15 * mod(floor(p.x) + floor(p.z), 2.0);  // checker
+        if (hit.y == 1.0) albedo = vec3(0.8, 0.3, 0.15);
+        if (hit.y == 2.0) albedo = vec3(0.2, 0.45, 0.85);
+
+        vec3 lightDir = normalize(vec3(0.6, 0.8, -0.5));        // toward the sun
+        float diff = max(dot(n, lightDir), 0.0);
+        float amb = 0.5 + 0.5 * n.y;
+        vec3 h = normalize(lightDir - rd);
+        float spec = pow(max(dot(n, h), 0.0), 64.0) * diff;     // no highlight on the dark side
+
+        col = albedo * (diff * vec3(1.0, 0.92, 0.8) + amb * vec3(0.12, 0.16, 0.25));
+        col += spec * 0.5;
+        col = mix(col, sky, 1.0 - exp(-0.004 * hit.x * hit.x)); // a hint of distance haze
+    }
+    col = pow(col, vec3(1.0 / 2.2));                            // gamma (Chapter 6)
+    fragColor = vec4(col, 1.0);
+}
+</script>
+<p>Read <code>mainImage</code> top to bottom and you can name every step: a ray per pixel, march it, find the normal, pick the material, add up three kinds of light, convert to screen values. This structure is the skeleton of nearly every raymarched shader on Shadertoy.</p>
+<details class="predict"><summary>The sphere and the box don't cast shadows on the floor. Why not, given that the light code is correct?</summary>
+<div><p>Diffuse lighting only asks "does this surface face the light?", never "is anything in the way?". The floor under the sphere faces straight up, so it's fully lit. Shadows need a second question per pixel: march a ray from the surface toward the light, and see if it hits anything. That's the first thing Chapter 14 adds.</p></div></details>
+<aside class="aha"><p>A 3D renderer is a distance function, a loop and a few dot products. Rays march by safe distances, normals come from how the distance changes, and light is how much a surface faces the sun.</p></aside>
+
+<section class="summary">
+<h2>What you now know</h2>
+<ul>
+<li>3D SDFs work like 2D ones: sphere <code>length(p) - r</code>, box, ground <code>p.y - h</code>; combine with min.</li>
+<li>A camera is an eye <code>ro</code> and a ray per pixel <code>rd = normalize(vec3(uv, f))</code>; f sets the field of view.</li>
+<li>Sphere tracing: step along the ray by the distance the SDF returns, until it's tiny (hit) or t is huge (miss).</li>
+<li>Rays that graze surfaces take the most steps.</li>
+<li>The normal is the direction in which distance grows fastest; finite differences measure it.</li>
+<li>Lighting: diffuse <code>dot(n, l)</code>, ambient <code>0.5 + 0.5 * n.y</code>, specular with the halfway vector, then gamma.</li>
+<li><code>map</code> can return a material id alongside the distance.</li>
+</ul>
+</section>
+
+<div class="try" title="Exercises">
+<p><b>1.</b> In <code>lit-scene</code>, melt the sphere and the box together with Chapter 8's <code>smin</code>. (You'll need to decide which material the melted region gets.)</p>
+<p><b>2.</b> Add a second, colored light from the other side, for example a weak blue one at <code>normalize(vec3(-0.7, 0.3, 0.2))</code>. Lights add.</p>
+<p><b>3.</b> Make the camera bob up and down with time by changing <code>ro</code>.</p>
+<p><b>4.</b> Try a torus: <code>length(vec2(length(p.xz) - 0.8, p.y)) - 0.25</code>. Can you work out why that formula describes a ring doughnut? (Hint: it's a 2D circle distance, computed in a plane that spins around the y axis.)</p>
+</div>
+<p><b>Go deeper:</b> <a href="https://iquilezles.org/articles/distfunctions/" target="_blank" rel="noopener">Inigo Quilez's 3D distance functions</a>, <a href="https://iquilezles.org/articles/normalsSDF/" target="_blank" rel="noopener">his article on SDF normals</a>, and <a href="https://jamie-wong.com/2016/07/15/ray-marching-signed-distance-functions/" target="_blank" rel="noopener">Jamie Wong's Ray Marching and Signed Distance Functions</a>, a very clear walk-through.</p>

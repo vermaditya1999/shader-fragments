@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>My shader</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+  #error { position: fixed; left: 0; right: 0; bottom: 0; margin: 0; padding: 10px 14px;
+           background: #5a1020; color: #fff; font: 13px/1.5 monospace; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<pre id="error" hidden></pre>
+
+<!-- Your shader: written exactly as on Shadertoy or in the course. -->
+<script id="shader" type="x-shader/x-fragment">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    vec3 col = 0.5 + 0.5 * cos(iTime + uv.xyx + vec3(0.0, 2.0, 4.0));
+    fragColor = vec4(col, 1.0);
+}
+</script>
+
+<script>
+// 1. A WebGL2 context: our connection to the GPU.
+const canvas = document.getElementById('canvas');
+const gl = canvas.getContext('webgl2');
+if (!gl) throw new Error('WebGL2 is not available in this browser.');
+
+// 2. Two shaders. The vertex shader places the corners of one big triangle.
+const vertexSource = `#version 300 es
+in vec2 aPos;
+void main() { gl_Position = vec4(aPos, 0.0, 1.0); }`;
+
+// The fragment shader is your code, glued between a header and a real main().
+const header = `#version 300 es
+precision highp float;
+uniform vec3 iResolution;
+uniform float iTime;
+uniform vec4 iMouse;
+out vec4 outColor;
+`;
+const footer = `
+void main() { mainImage(outColor, gl_FragCoord.xy); }`;
+const code = document.getElementById('shader').textContent.replace(/^\n/, '');   // drop the first empty line
+const fragmentSource = header + code + footer;
+const headerLines = header.split('\n').length - 1;   // to fix up error line numbers
+
+// 3. Compile both shaders and link them into one program.
+function compile(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+    const log = gl.getShaderInfoLog(shader)
+      .replace(/ERROR: 0:(\d+)/g, (m, n) => 'ERROR: line ' + (n - headerLines));
+    const box = document.getElementById('error');
+    box.textContent = log;
+    box.hidden = false;
+    throw new Error('The shader did not compile.');
+  }
+  return shader;
+}
+const program = gl.createProgram();
+gl.attachShader(program, compile(gl.VERTEX_SHADER, vertexSource));
+gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragmentSource));
+gl.linkProgram(program);
+gl.useProgram(program);
+
+// 4. The triangle: three corners in clip space, uploaded to the GPU once.
+const buffer = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+const aPos = gl.getAttribLocation(program, 'aPos');
+gl.enableVertexAttribArray(aPos);
+gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);   // 2 floats per corner
+
+// 5. Where each uniform lives in the program.
+const uResolution = gl.getUniformLocation(program, 'iResolution');
+const uTime = gl.getUniformLocation(program, 'iTime');
+const uMouse = gl.getUniformLocation(program, 'iMouse');
+
+// 6. The mouse, in canvas pixels, with y pointing up like fragCoord.
+let mouse = [0, 0, 0, 0];
+function pointerPos(e) {
+  const r = canvas.getBoundingClientRect();
+  return [(e.clientX - r.left) * canvas.width / r.width,
+          (r.bottom - e.clientY) * canvas.height / r.height];
+}
+canvas.addEventListener('pointerdown', e => { const p = pointerPos(e); mouse = [p[0], p[1], p[0], p[1]]; });
+canvas.addEventListener('pointermove', e => {
+  if (e.buttons & 1) { const p = pointerPos(e); mouse[0] = p[0]; mouse[1] = p[1]; }
+});
+window.addEventListener('pointerup', () => { mouse[2] = -Math.abs(mouse[2]); mouse[3] = -Math.abs(mouse[3]); });
+
+// 7. Draw, every frame.
+function frame(ms) {
+  // Make the canvas hold as many pixels as it covers on screen (up to 2x for sharp screens).
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  gl.viewport(0, 0, w, h);
+
+  gl.uniform3f(uResolution, w, h, 1);
+  gl.uniform1f(uTime, ms / 1000);
+  gl.uniform4f(uMouse, mouse[0], mouse[1], mouse[2], mouse[3]);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);   // one triangle: the fragment shader runs on every pixel
+
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

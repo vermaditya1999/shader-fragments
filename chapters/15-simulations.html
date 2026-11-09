@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>15. Living simulations: memory and feedback · Shader Fragments</title>
+<meta name="description" content="Textures and texels, rendering into a buffer, ping-pong, feedback effects, the Game of Life, reaction-diffusion and flowing dye.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="../assets/icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+
+</head>
+<body data-page="chapter" data-root="..">
+<header class="top"><div class="top-in">
+  <a class="logo" href="../index.html"><span class="logo-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="word">Shader Fragments</span></a>
+  <nav class="nav" aria-label="Main"><a href="../index.html#contents">Contents</a><a href="../reference.html">Reference</a><a href="../playground.html">Playground</a></nav>
+</div></header>
+<main>
+<div class="wrap"><div class="chapter">
+<header class="ch-head">
+  <p class="eyebrow"><b>Part II · Make things</b> · Chapter 15</p>
+  <h1>Living simulations: memory and feedback</h1>
+  <p class="lede">Every shader so far has had amnesia: each frame is computed from scratch, from the pixel's position and the time. This chapter gives shaders a memory. Let a shader read what it drew last frame, and it can simulate things that evolve: trails, cellular life, chemical patterns like a leopard's spots, and dye swirling in water, with a million cells updating at once.</p>
+  <details class="ch-toc" open><summary>In this chapter</summary><ol><li><a href="#textures">Textures: images a shader can read</a></li><li><a href="#memory">Memory: drawing into a buffer</a></li><li><a href="#feedback">Video feedback</a></li><li><a href="#life">Cellular automata: the Game of Life</a></li><li><a href="#reaction-diffusion">Reaction–diffusion: how a leopard gets its spots</a></li><li><a href="#flow">Flow: dye in a current</a></li></ol></details>
+</header>
+<aside class="stage" id="workbench" data-start="trails" aria-label="Workbench: live shader and code"></aside>
+<article class="ch-body">
+
+
+
+<h2 id="textures"><span class="sec-n">15.1</span>Textures: images a shader can read</h2>
+<p>A <b>texture</b> is an image stored on the GPU that a shader can read from. It's a grid of <b>texels</b> (texture pixels), each holding four numbers, red, green, blue and alpha. Shaders read textures through a <b>sampler</b>, a uniform such as Shadertoy's <code>iChannel0</code>, with two functions:</p>
+<pre class="snip"><code>vec4 c = texture(iChannel0, uv);                 // uv runs 0..1 across the whole texture
+vec4 t = texelFetch(iChannel0, ivec2(12, 7), 0); // the exact texel in column 12, row 7
+ivec2 size = textureSize(iChannel0, 0);          // how many texels wide and tall it is</code></pre>
+<p><code>texture</code> takes <b>normalized</b> coordinates: (0, 0) is the bottom-left corner of the image and (1, 1) the top-right, whatever its size in texels. When uv lands between texel centers, the GPU can blend the four nearest texels: that's <b>linear filtering</b>, and it's exactly Chapter 11's bilinear blend, done for free by the hardware. With <b>nearest</b> filtering it simply returns the closest texel, so magnified textures look blocky. And when uv goes outside 0..1, the <b>wrap mode</b> decides what happens: repeat the texture (like fract), or clamp to the edge.</p>
+<p><code>texelFetch</code> skips all of that and reads one exact texel by its integer column and row (the last argument is the "mip level", always 0 for us). It's the right tool when texels are data, like cells in a simulation, rather than an image.</p>
+<p>On Shadertoy you can plug images, videos and webcams into the iChannels. In this course, the channels carry two things: a buffer the shader drew itself (this chapter), and sound (Chapter 16).</p>
+
+<h2 id="memory"><span class="sec-n">15.2</span>Memory: drawing into a buffer</h2>
+<p>Normally the output of a fragment shader goes to the screen. But the GPU can also be told to draw into a texture instead, through what's called a <b>framebuffer</b>. Draw into a texture this frame, read it back next frame, and the shader has memory.</p>
+<p>One rule complicates it: a pass can't read from the same texture it's writing into, because thousands of pixels run at once and they'd be reading values that other pixels are halfway through overwriting. The standard fix is two textures that take turns, called <b>ping-pong</b>:</p>
+<figure class="diagram">
+<svg viewBox="0 0 540 230" role="img" aria-label="Ping-pong: on one frame the buffer pass reads texture A and writes texture B; on the next it reads B and writes A. The image pass always shows the newest one.">
+  <defs><marker id="arr15" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10z" fill="currentColor"/></marker></defs>
+  <g font-family="ui-monospace, monospace" font-size="13" fill="currentColor">
+    <text x="20" y="22" fill-opacity=".7">frame n</text>
+    <text x="510" y="134" fill-opacity=".7" text-anchor="end">frame n + 1</text>
+  </g>
+  <g stroke="currentColor" stroke-width="1.6" fill="none">
+    <rect x="20" y="34" width="100" height="56" rx="6" fill="#4fb3c8" fill-opacity=".18"/>
+    <rect x="190" y="34" width="150" height="56" rx="28" fill="#f2a33a" fill-opacity=".18"/>
+    <rect x="410" y="34" width="100" height="56" rx="6" fill="#d0569c" fill-opacity=".18"/>
+    <path d="M120 62 H186" marker-end="url(#arr15)"/><path d="M340 62 H406" marker-end="url(#arr15)"/>
+    <rect x="20" y="144" width="100" height="56" rx="6" fill="#d0569c" fill-opacity=".18"/>
+    <rect x="190" y="144" width="150" height="56" rx="28" fill="#f2a33a" fill-opacity=".18"/>
+    <rect x="410" y="144" width="100" height="56" rx="6" fill="#4fb3c8" fill-opacity=".18"/>
+    <path d="M120 172 H186" marker-end="url(#arr15)"/><path d="M340 172 H406" marker-end="url(#arr15)"/>
+    <path d="M460 90 C 460 115, 70 115, 70 140" stroke-dasharray="5 5" stroke-opacity=".6" marker-end="url(#arr15)"/>
+  </g>
+  <g font-family="ui-monospace, monospace" font-size="13" fill="currentColor" text-anchor="middle">
+    <text x="70" y="60">texture A</text><text x="70" y="78" font-size="11" fill-opacity=".7">last frame</text>
+    <text x="265" y="60">Buffer A pass</text><text x="265" y="78" font-size="11" fill-opacity=".7">iChannel0 = A</text>
+    <text x="460" y="60">texture B</text><text x="460" y="78" font-size="11" fill-opacity=".7">newest → Image</text>
+    <text x="70" y="170">texture B</text><text x="70" y="188" font-size="11" fill-opacity=".7">last frame</text>
+    <text x="265" y="170">Buffer A pass</text><text x="265" y="188" font-size="11" fill-opacity=".7">iChannel0 = B</text>
+    <text x="460" y="170">texture A</text><text x="460" y="188" font-size="11" fill-opacity=".7">newest → Image</text>
+    <text x="155" y="112" font-size="11" fill-opacity=".7">swap roles</text>
+  </g>
+</svg>
+<figcaption>Two textures take turns. The buffer pass always reads last frame's texture and writes the other one; then they swap. The Image pass draws the newest one to the screen.</figcaption>
+</figure>
+<p>The workbench handles all of this. Examples in this chapter have two tabs, following Shadertoy's layout:</p>
+<ul>
+<li><b>Buffer A</b> draws into a hidden texture. Its <code>iChannel0</code> is <em>its own output from the previous frame</em>.</li>
+<li><b>Image</b> draws to the screen as usual. Its <code>iChannel0</code> is Buffer A's newest output.</li>
+</ul>
+<p>The simplest thing to do with memory: keep most of last frame and add something new. Here a glowing dot wanders around (drag on the canvas to steer it), and each frame the old picture is kept at 97% brightness, so the past fades slowly, like a long-exposure photo:</p>
+<figure class="ex" id="ex-trails" data-ex="trails" data-label="Example 15.1" data-title="Light painting: each frame keeps 97% of the last" data-cfg='{"bufferScale": 1, "substeps": 1, "filter": "linear"}'><figcaption><span class="ex-n">Example 15.1</span><span>Light painting: each frame keeps 97% of the last</span></figcaption><div class="ex-view"></div><p class="ex-pass">Buffer A</p><pre class="ex-code"><code>// Buffer A. Its iChannel0 is ITS OWN previous frame.
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    vec3 last = texture(iChannel0, uv).rgb;          // what was here last frame?
+
+    vec2 p = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    vec2 brush = 0.7 * vec2(sin(iTime * 1.3), sin(iTime * 1.9 + 1.0));      // a wandering point
+    if (iMouse.z &gt; 0.0) brush = (iMouse.xy * 2.0 - iResolution.xy) / iResolution.y;   // or your pointer
+
+    float dotGlow = exp(-pow(length(p - brush) / 0.04, 2.0));   // a soft dot
+    vec3 ink = 0.5 + 0.5 * cos(iTime + vec3(0.0, 2.0, 4.0));    // a slowly changing color
+
+    vec3 col = last * 0.97 + ink * dotGlow * 0.4;    // keep 97% of the past, add the new
+    fragColor = vec4(col, 1.0);
+}</code></pre><p class="ex-pass">Image</p><pre class="ex-code"><code>// Image. Here iChannel0 is Buffer A's newest frame.
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    vec3 col = texture(iChannel0, uv).rgb;
+    col = 1.0 - exp(-col * 1.5);      // tone map: where trails overlap they glow instead of clipping
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="buffer">
+// Buffer A. Its iChannel0 is ITS OWN previous frame.
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    vec3 last = texture(iChannel0, uv).rgb;          // what was here last frame?
+
+    vec2 p = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    vec2 brush = 0.7 * vec2(sin(iTime * 1.3), sin(iTime * 1.9 + 1.0));      // a wandering point
+    if (iMouse.z > 0.0) brush = (iMouse.xy * 2.0 - iResolution.xy) / iResolution.y;   // or your pointer
+
+    float dotGlow = exp(-pow(length(p - brush) / 0.04, 2.0));   // a soft dot
+    vec3 ink = 0.5 + 0.5 * cos(iTime + vec3(0.0, 2.0, 4.0));    // a slowly changing color
+
+    vec3 col = last * 0.97 + ink * dotGlow * 0.4;    // keep 97% of the past, add the new
+    fragColor = vec4(col, 1.0);
+}
+</script><script type="text/x-glsl" data-pass="image">
+// Image. Here iChannel0 is Buffer A's newest frame.
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    vec3 col = texture(iChannel0, uv).rgb;
+    col = 1.0 - exp(-col * 1.5);      // tone map: where trails overlap they glow instead of clipping
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<details class="predict"><summary>Change 0.97 to 0.999. Then to 0.7. What changes, and why?</summary>
+<div><p>At 0.999 the trail barely fades: after 60 frames (one second) it still has 0.999<sup>60</sup> ≈ 94% of its brightness, so the whole path stays and builds into a bright tangle. At 0.7, after just 10 frames only 0.7<sup>10</sup> ≈ 3% remains, so the trail is a short comet tail. It's Chapter 14's fog again: the same fraction lost per step is an exponential decay, just counted in frames instead of distance.</p></div></details>
+<aside class="box note"><span class="box-t">The first frame, and why buffers store floats</span><p>A buffer starts out empty: all zeros. When a simulation needs a starting state, set it up on the first frame, using the uniform <code>iFrame</code> (the frame counter, starting at 0): <code>if (iFrame == 0) { ...set up...; return; }</code>. In this workbench, resizing the canvas also restarts the buffer.</p><p>The buffer stores 32- or 16-bit floating point numbers where the device supports them. Ordinary images store each channel as one of 256 steps, which would wreck slow processes: a trail fading by 3% per frame would get stuck at a dim floor, because 97% of a small step rounds back to the same step.</p></aside>
+
+<h2 id="feedback"><span class="sec-n">15.3</span>Video feedback</h2>
+<p>Point a video camera at the screen it's displaying on, and you get an infinite tunnel of screens, warped and colored by the camera's quirks. You can do the same with a buffer: read last frame not at the same spot, but slightly zoomed and turned. Anything drawn once gets carried outward and around, frame after frame:</p>
+<figure class="ex" id="ex-feedback" data-ex="feedback" data-label="Example 15.2" data-title="Video feedback: the past, zoomed and turned" data-cfg='{"bufferScale": 1, "substeps": 1, "filter": "linear"}'><figcaption><span class="ex-n">Example 15.2</span><span>Video feedback: the past, zoomed and turned</span></figcaption><div class="ex-view"></div><p class="ex-pass">Buffer A</p><pre class="ex-code"><code>// Buffer A: read the last frame zoomed and turned a little, then draw something new on top.
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    float aspect = iResolution.x / iResolution.y;
+
+    vec2 c = (uv - 0.5) * vec2(aspect, 1.0);       // centered, with square units (Chapter 3)
+    float a = 0.012;                               // turn a little each frame
+    c = mat2(cos(a), sin(a), -sin(a), cos(a)) * c;
+    c *= 0.985;                                    // read from closer to the center: the old image grows
+    vec3 last = texture(iChannel0, c / vec2(aspect, 1.0) + 0.5).rgb;
+
+    vec2 p = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    vec2 pos = 0.25 * vec2(cos(iTime * 1.1), sin(iTime * 1.7));   // a small ring that wanders
+    float ring = abs(length(p - pos) - 0.07);
+    vec3 ink = 0.5 + 0.5 * cos(iTime * 1.5 + vec3(0.0, 2.0, 4.0));
+
+    vec3 col = last * 0.975 + ink * 0.0015 / max(ring, 0.003);   // fade the past, add the new
+    fragColor = vec4(col, 1.0);
+}</code></pre><p class="ex-pass">Image</p><pre class="ex-code"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec3 col = texture(iChannel0, fragCoord / iResolution.xy).rgb;
+    fragColor = vec4(1.0 - exp(-col), 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="buffer">
+// Buffer A: read the last frame zoomed and turned a little, then draw something new on top.
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    float aspect = iResolution.x / iResolution.y;
+
+    vec2 c = (uv - 0.5) * vec2(aspect, 1.0);       // centered, with square units (Chapter 3)
+    float a = 0.012;                               // turn a little each frame
+    c = mat2(cos(a), sin(a), -sin(a), cos(a)) * c;
+    c *= 0.985;                                    // read from closer to the center: the old image grows
+    vec3 last = texture(iChannel0, c / vec2(aspect, 1.0) + 0.5).rgb;
+
+    vec2 p = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    vec2 pos = 0.25 * vec2(cos(iTime * 1.1), sin(iTime * 1.7));   // a small ring that wanders
+    float ring = abs(length(p - pos) - 0.07);
+    vec3 ink = 0.5 + 0.5 * cos(iTime * 1.5 + vec3(0.0, 2.0, 4.0));
+
+    vec3 col = last * 0.975 + ink * 0.0015 / max(ring, 0.003);   // fade the past, add the new
+    fragColor = vec4(col, 1.0);
+}
+</script><script type="text/x-glsl" data-pass="image">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec3 col = texture(iChannel0, fragCoord / iResolution.xy).rgb;
+    fragColor = vec4(1.0 - exp(-col), 1.0);
+}
+</script></figure>
+<p>The ring itself is small and simple. The spiral arms are its history: each copy has been zoomed and turned a few more times than the one inside it. Try a negative angle, a zoom above 1.0 (the image shrinks inward instead), or warping the read position with Chapter 11's noise.</p>
+
+<h2 id="life"><span class="sec-n">15.4</span>Cellular automata: the Game of Life</h2>
+<p>A buffer can also be a grid of data. Here each texel is one cell of John Conway's Game of Life (1970), a "zero-player game" with two rules about each cell's eight neighbors:</p>
+<ul>
+<li>A live cell with <b>two or three</b> live neighbors survives. Fewer and it dies of loneliness; more and it dies of overcrowding.</li>
+<li>A dead cell with <b>exactly three</b> live neighbors comes alive.</li>
+</ul>
+<p>That's all, yet from random soup emerge stable blocks, blinking oscillators and little "gliders" that walk across the grid forever. On a CPU you'd loop over every cell; here every cell updates at the same moment, which is exactly how the rules are defined. The buffer runs at a quarter of the screen's resolution so each cell is a visible block, with nearest filtering so cells stay crisp:</p>
+<figure class="ex long" id="ex-life" data-ex="life" data-label="Example 15.3" data-title="Conway&#x27;s Game of Life, every cell at once" data-cfg='{"bufferScale": 0.25, "substeps": 1, "filter": "nearest"}'><figcaption><span class="ex-n">Example 15.3</span><span>Conway's Game of Life, every cell at once</span></figcaption><div class="ex-view"></div><p class="ex-pass">Buffer A</p><pre class="ex-code"><code>// Buffer A: one texel = one cell. r = alive (0 or 1), g = a fading memory of life.
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float alive(ivec2 p) {
+    ivec2 size = ivec2(iResolution.xy);
+    p = (p + size) % size;                       // wrap around the edges: the grid is a donut
+    return texelFetch(iChannel0, p, 0).r;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    ivec2 px = ivec2(fragCoord);                 // this cell's column and row
+
+    if (iFrame == 0) {                           // first frame: random soup, 30% alive
+        float r = step(0.7, hash(fragCoord));
+        fragColor = vec4(r, r, 0.0, 1.0);
+        return;
+    }
+
+    float n = 0.0;                               // count the 8 neighbors
+    for (int y = -1; y &lt;= 1; y++)
+    for (int x = -1; x &lt;= 1; x++) {
+        if (x == 0 &amp;&amp; y == 0) continue;          // don't count yourself
+        n += alive(px + ivec2(x, y));
+    }
+
+    float me = alive(px);
+    float next = 0.0;
+    if (me &gt; 0.5 &amp;&amp; n &gt; 1.5 &amp;&amp; n &lt; 3.5) next = 1.0;   // 2 or 3 neighbors: survive
+    if (me &lt; 0.5 &amp;&amp; n &gt; 2.5 &amp;&amp; n &lt; 3.5) next = 1.0;   // exactly 3: born
+
+    if (iMouse.z &gt; 0.0 &amp;&amp; length(fragCoord - iMouse.xy) &lt; 5.0)   // drag to scribble
+        next = step(0.5, hash(fragCoord + iTime));
+
+    float memory = max(next, texelFetch(iChannel0, px, 0).g * 0.92);
+    fragColor = vec4(next, memory, 0.0, 1.0);
+}</code></pre><p class="ex-pass">Image</p><pre class="ex-code"><code>// Image: white = alive now, color = recently alive.
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    vec2 cell = texture(iChannel0, uv).rg;
+    vec3 trail = 0.5 + 0.5 * cos(6.28318 * (cell.g * 0.7 + vec3(0.55, 0.65, 0.8)));
+    vec3 col = vec3(0.03, 0.035, 0.05) + trail * cell.g * 0.55 + vec3(cell.r) * 0.9;
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn ex-more" type="button" data-label="Show all 46 lines">Show all 46 lines</button><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="buffer">
+// Buffer A: one texel = one cell. r = alive (0 or 1), g = a fading memory of life.
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float alive(ivec2 p) {
+    ivec2 size = ivec2(iResolution.xy);
+    p = (p + size) % size;                       // wrap around the edges: the grid is a donut
+    return texelFetch(iChannel0, p, 0).r;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    ivec2 px = ivec2(fragCoord);                 // this cell's column and row
+
+    if (iFrame == 0) {                           // first frame: random soup, 30% alive
+        float r = step(0.7, hash(fragCoord));
+        fragColor = vec4(r, r, 0.0, 1.0);
+        return;
+    }
+
+    float n = 0.0;                               // count the 8 neighbors
+    for (int y = -1; y <= 1; y++)
+    for (int x = -1; x <= 1; x++) {
+        if (x == 0 && y == 0) continue;          // don't count yourself
+        n += alive(px + ivec2(x, y));
+    }
+
+    float me = alive(px);
+    float next = 0.0;
+    if (me > 0.5 && n > 1.5 && n < 3.5) next = 1.0;   // 2 or 3 neighbors: survive
+    if (me < 0.5 && n > 2.5 && n < 3.5) next = 1.0;   // exactly 3: born
+
+    if (iMouse.z > 0.0 && length(fragCoord - iMouse.xy) < 5.0)   // drag to scribble
+        next = step(0.5, hash(fragCoord + iTime));
+
+    float memory = max(next, texelFetch(iChannel0, px, 0).g * 0.92);
+    fragColor = vec4(next, memory, 0.0, 1.0);
+}
+</script><script type="text/x-glsl" data-pass="image">
+// Image: white = alive now, color = recently alive.
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    vec2 cell = texture(iChannel0, uv).rg;
+    vec3 trail = 0.5 + 0.5 * cos(6.28318 * (cell.g * 0.7 + vec3(0.55, 0.65, 0.8)));
+    vec3 col = vec3(0.03, 0.035, 0.05) + trail * cell.g * 0.55 + vec3(cell.r) * 0.9;
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<p>Two details: comparisons like <code>n &gt; 1.5 &amp;&amp; n &lt; 3.5</code> mean "2 or 3" while staying safe from tiny float errors, and the green channel is a second piece of memory per cell, a value that jumps to 1 when the cell lives and fades otherwise. A texel has four channels; simulations often use all of them as separate variables.</p>
+
+<h2 id="reaction-diffusion"><span class="sec-n">15.5</span>Reaction–diffusion: how a leopard gets its spots</h2>
+<p>In 1952, Alan Turing (yes, that Turing) proposed that patterns like spots and stripes on animals could come from two chemicals that <b>react</b> with each other and <b>diffuse</b> (spread out) at different speeds. Here's one such system, the Gray–Scott model. Each pixel holds amounts of two chemicals, A (red channel) and B (green channel):</p>
+<ul>
+<li><b>Reaction</b>: B eats A to make more B. Where there's A and some B, B grows: <code>A·B·B</code>.</li>
+<li><b>Feed and kill</b>: A is constantly topped up (feed), and B constantly decays (kill).</li>
+<li><b>Diffusion</b>: both spread to their neighbors, A twice as fast as B.</li>
+</ul>
+<aside class="box math"><span class="box-t">Math from zero: diffusion and the Laplacian</span>
+<p>Spreading means each cell moves toward the average of its neighbors. Pour ink in water: a spot with more ink than its surroundings loses some; a spot with less gains some. So the change in one step is proportional to <em>(average of neighbors) − (me)</em>. That quantity is called the <b>Laplacian</b>.</p>
+<p>The code computes it with weights: 0.2 for each of the four direct neighbors and 0.05 for each diagonal one. They add up to 1, so the weighted sum is a neighbor average, and subtracting the cell's own value gives "how far below its surroundings it is". Positive Laplacian: the cell is lower than its neighbors and will rise. Negative: it's a peak and will flatten.</p>
+</aside>
+<figure class="ex long" id="ex-turing" data-ex="turing" data-label="Example 15.4" data-title="Turing patterns: two chemicals reacting and spreading" data-cfg='{"bufferScale": 0.5, "substeps": 12, "filter": "linear"}'><figcaption><span class="ex-n">Example 15.4</span><span>Turing patterns: two chemicals reacting and spreading</span></figcaption><div class="ex-view"></div><p class="ex-pass">Buffer A</p><pre class="ex-code"><code>// Buffer A: Gray-Scott reaction-diffusion. r = chemical A, g = chemical B.
+// This pass runs 12 times per frame, because the patterns grow slowly.
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+vec2 chem(vec2 fragCoord, vec2 offset) {     // A and B at a neighboring texel, from the last step
+    return texture(iChannel0, (fragCoord + offset) / iResolution.xy).rg;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    if (iFrame == 0) {                       // start: A everywhere, a few specks of B
+        float b = step(0.985, hash(floor(fragCoord / 6.0)));
+        fragColor = vec4(1.0, b, 0.0, 1.0);
+        return;
+    }
+
+    float feed = 0.055;    // how fast A is topped up
+    float kill = 0.062;    // how fast B dies off
+    float dA = 1.0;        // how fast A spreads
+    float dB = 0.5;        // how fast B spreads
+
+    vec2 c = chem(fragCoord, vec2(0.0));
+    vec2 lap = -c                            // the Laplacian: neighbor average minus me
+        + 0.2  * (chem(fragCoord, vec2( 1.0,  0.0)) + chem(fragCoord, vec2(-1.0,  0.0))
+                + chem(fragCoord, vec2( 0.0,  1.0)) + chem(fragCoord, vec2( 0.0, -1.0)))
+        + 0.05 * (chem(fragCoord, vec2( 1.0,  1.0)) + chem(fragCoord, vec2(-1.0,  1.0))
+                + chem(fragCoord, vec2( 1.0, -1.0)) + chem(fragCoord, vec2(-1.0, -1.0)));
+
+    float a = c.r, b = c.g;
+    float reaction = a * b * b;              // A + 2B -&gt; 3B
+    a += dA * lap.r - reaction + feed * (1.0 - a);
+    b += dB * lap.g + reaction - (kill + feed) * b;
+
+    if (iMouse.z &gt; 0.0 &amp;&amp; length(fragCoord - iMouse.xy) &lt; 6.0) b = 0.9;   // drag to add B
+
+    fragColor = vec4(clamp(a, 0.0, 1.0), clamp(b, 0.0, 1.0), 0.0, 1.0);
+}</code></pre><p class="ex-pass">Image</p><pre class="ex-code"><code>// Image: show chemical B as a glossy surface, lit with Chapter 13's tricks.
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    vec2 px = 1.0 / vec2(textureSize(iChannel0, 0));          // one buffer texel, in uv units
+    float b  = texture(iChannel0, uv).g;
+    float bx = texture(iChannel0, uv + vec2(px.x, 0.0)).g - texture(iChannel0, uv - vec2(px.x, 0.0)).g;
+    float by = texture(iChannel0, uv + vec2(0.0, px.y)).g - texture(iChannel0, uv - vec2(0.0, px.y)).g;
+
+    vec3 n = normalize(vec3(-bx, -by, 0.08));                // B as a height: finite-difference normal
+    float light = 0.55 + 0.45 * dot(n, normalize(vec3(-0.5, 0.6, 0.6)));
+    float v = smoothstep(0.08, 0.32, b);
+    vec3 col = mix(vec3(0.06, 0.08, 0.14), vec3(0.98, 0.56, 0.36), v) * light;
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn ex-more" type="button" data-label="Show all 52 lines">Show all 52 lines</button><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="buffer">
+// Buffer A: Gray-Scott reaction-diffusion. r = chemical A, g = chemical B.
+// This pass runs 12 times per frame, because the patterns grow slowly.
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+vec2 chem(vec2 fragCoord, vec2 offset) {     // A and B at a neighboring texel, from the last step
+    return texture(iChannel0, (fragCoord + offset) / iResolution.xy).rg;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    if (iFrame == 0) {                       // start: A everywhere, a few specks of B
+        float b = step(0.985, hash(floor(fragCoord / 6.0)));
+        fragColor = vec4(1.0, b, 0.0, 1.0);
+        return;
+    }
+
+    float feed = 0.055;    // how fast A is topped up
+    float kill = 0.062;    // how fast B dies off
+    float dA = 1.0;        // how fast A spreads
+    float dB = 0.5;        // how fast B spreads
+
+    vec2 c = chem(fragCoord, vec2(0.0));
+    vec2 lap = -c                            // the Laplacian: neighbor average minus me
+        + 0.2  * (chem(fragCoord, vec2( 1.0,  0.0)) + chem(fragCoord, vec2(-1.0,  0.0))
+                + chem(fragCoord, vec2( 0.0,  1.0)) + chem(fragCoord, vec2( 0.0, -1.0)))
+        + 0.05 * (chem(fragCoord, vec2( 1.0,  1.0)) + chem(fragCoord, vec2(-1.0,  1.0))
+                + chem(fragCoord, vec2( 1.0, -1.0)) + chem(fragCoord, vec2(-1.0, -1.0)));
+
+    float a = c.r, b = c.g;
+    float reaction = a * b * b;              // A + 2B -> 3B
+    a += dA * lap.r - reaction + feed * (1.0 - a);
+    b += dB * lap.g + reaction - (kill + feed) * b;
+
+    if (iMouse.z > 0.0 && length(fragCoord - iMouse.xy) < 6.0) b = 0.9;   // drag to add B
+
+    fragColor = vec4(clamp(a, 0.0, 1.0), clamp(b, 0.0, 1.0), 0.0, 1.0);
+}
+</script><script type="text/x-glsl" data-pass="image">
+// Image: show chemical B as a glossy surface, lit with Chapter 13's tricks.
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    vec2 px = 1.0 / vec2(textureSize(iChannel0, 0));          // one buffer texel, in uv units
+    float b  = texture(iChannel0, uv).g;
+    float bx = texture(iChannel0, uv + vec2(px.x, 0.0)).g - texture(iChannel0, uv - vec2(px.x, 0.0)).g;
+    float by = texture(iChannel0, uv + vec2(0.0, px.y)).g - texture(iChannel0, uv - vec2(0.0, px.y)).g;
+
+    vec3 n = normalize(vec3(-bx, -by, 0.08));                // B as a height: finite-difference normal
+    float light = 0.55 + 0.45 * dot(n, normalize(vec3(-0.5, 0.6, 0.6)));
+    float v = smoothstep(0.08, 0.32, b);
+    vec3 col = mix(vec3(0.06, 0.08, 0.14), vec3(0.98, 0.56, 0.36), v) * light;
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<p>The specks grow, split and settle into a maze of worm-like stripes and spots. Nothing in the code describes a stripe: the pattern <em>emerges</em> from local rules, the same way it does on a zebra. Different feed and kill values give completely different worlds. These defaults are what Karl Sims calls "coral growth"; try his "mitosis" setting, feed 0.0367 and kill 0.0649, for spots that keep dividing like cells.</p>
+<aside class="box aha"><span class="box-t">// AHA</span><p>Give a shader memory, and simple local rules, applied to every pixel at once, grow complex patterns that nobody drew.</p></aside>
+
+<h2 id="flow"><span class="sec-n">15.6</span>Flow: dye in a current</h2>
+<p>To make dye flow, you'd naturally think: each bit of dye moves along the current to its next position. But a pixel can only write <em>its own</em> color, not push color to another pixel. So turn the question around, and ask: <em>where did my color come from?</em> Look a little way upstream, against the current, and copy the color from there. This backwards trick is called <b>semi-Lagrangian advection</b>, and it's how real-time fluid simulations move things around.</p>
+<p>The current itself comes from noise, but used cleverly. Chapter 11's noise is a landscape of hills and valleys. Its slope (gradient) points uphill, so following it would make dye pile up on the peaks. Turn the slope a quarter turn (Chapter 7's perpendicular) and you get a current that flows <em>along</em> the contour lines instead, circling every hill. Water flowing like that never piles up or thins out, much like a real liquid. This is called <b>curl noise</b>:</p>
+<figure class="ex long" id="ex-flow" data-ex="flow" data-label="Example 15.5" data-title="Dye carried by curl noise: each pixel looks upstream" data-cfg='{"bufferScale": 0.5, "substeps": 1, "filter": "linear"}'><figcaption><span class="ex-n">Example 15.5</span><span>Dye carried by curl noise: each pixel looks upstream</span></figcaption><div class="ex-view"></div><p class="ex-pass">Buffer A</p><pre class="ex-code"><code>// Buffer A: colored dye, carried along by a swirling current.
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float noise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
+               mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+
+// The current: noise's slope, turned a quarter turn, so it flows around hills, not up them.
+vec2 current(vec2 p) {
+    float e = 0.01;
+    float dx = noise(p + vec2(e, 0.0)) - noise(p - vec2(e, 0.0));   // slope in x
+    float dy = noise(p + vec2(0.0, e)) - noise(p - vec2(0.0, e));   // slope in y
+    return vec2(dy, -dx) / (2.0 * e);                                 // (dx, dy) turned 90°
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    vec2 p = fragCoord / iResolution.y * 2.5 + vec2(0.0, iTime * 0.05);
+
+    vec2 v = current(p) * 0.0015;                  // how far the water moves in one frame
+    vec3 col = texture(iChannel0, uv - v).rgb;     // where did my color come from? look upstream
+
+    vec2 q = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    for (int i = 0; i &lt; 3; i++) {                  // three wandering taps drip in new dye
+        float fi = float(i);
+        vec2 tap = 0.6 * vec2(sin(iTime * 0.5 + fi * 2.1), cos(iTime * 0.4 + fi * 1.3));
+        vec3 ink = 0.5 + 0.5 * cos(6.28318 * (fi * 0.33 + vec3(0.0, 0.33, 0.67)));
+        col = mix(col, ink, exp(-pow(length(q - tap) / 0.03, 2.0)));
+    }
+    if (iMouse.z &gt; 0.0) {                          // drag to drip white
+        vec2 m = (iMouse.xy * 2.0 - iResolution.xy) / iResolution.y;
+        col = mix(col, vec3(1.0), exp(-pow(length(q - m) / 0.04, 2.0)));
+    }
+
+    col = mix(col, vec3(0.04, 0.05, 0.08), 0.002); // old dye very slowly fades
+    if (iFrame == 0) col = vec3(0.04, 0.05, 0.08);
+    fragColor = vec4(col, 1.0);
+}</code></pre><p class="ex-pass">Image</p><pre class="ex-code"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    fragColor = vec4(texture(iChannel0, fragCoord / iResolution.xy).rgb, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn ex-more" type="button" data-label="Show all 46 lines">Show all 46 lines</button><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="buffer">
+// Buffer A: colored dye, carried along by a swirling current.
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float noise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
+               mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+
+// The current: noise's slope, turned a quarter turn, so it flows around hills, not up them.
+vec2 current(vec2 p) {
+    float e = 0.01;
+    float dx = noise(p + vec2(e, 0.0)) - noise(p - vec2(e, 0.0));   // slope in x
+    float dy = noise(p + vec2(0.0, e)) - noise(p - vec2(0.0, e));   // slope in y
+    return vec2(dy, -dx) / (2.0 * e);                                 // (dx, dy) turned 90°
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    vec2 p = fragCoord / iResolution.y * 2.5 + vec2(0.0, iTime * 0.05);
+
+    vec2 v = current(p) * 0.0015;                  // how far the water moves in one frame
+    vec3 col = texture(iChannel0, uv - v).rgb;     // where did my color come from? look upstream
+
+    vec2 q = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    for (int i = 0; i < 3; i++) {                  // three wandering taps drip in new dye
+        float fi = float(i);
+        vec2 tap = 0.6 * vec2(sin(iTime * 0.5 + fi * 2.1), cos(iTime * 0.4 + fi * 1.3));
+        vec3 ink = 0.5 + 0.5 * cos(6.28318 * (fi * 0.33 + vec3(0.0, 0.33, 0.67)));
+        col = mix(col, ink, exp(-pow(length(q - tap) / 0.03, 2.0)));
+    }
+    if (iMouse.z > 0.0) {                          // drag to drip white
+        vec2 m = (iMouse.xy * 2.0 - iResolution.xy) / iResolution.y;
+        col = mix(col, vec3(1.0), exp(-pow(length(q - m) / 0.04, 2.0)));
+    }
+
+    col = mix(col, vec3(0.04, 0.05, 0.08), 0.002); // old dye very slowly fades
+    if (iFrame == 0) col = vec3(0.04, 0.05, 0.08);
+    fragColor = vec4(col, 1.0);
+}
+</script><script type="text/x-glsl" data-pass="image">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    fragColor = vec4(texture(iChannel0, fragCoord / iResolution.xy).rgb, 1.0);
+}
+</script></figure>
+<p>Give it a minute: the dye stretches into fine filaments that fold around invisible whirlpools. The <code>vec2(0.0, iTime * 0.05)</code> slowly slides the noise, so the whirlpools themselves drift over time. A full fluid simulation also computes how the current pushes on itself, which takes a few more passes, but the backwards look-up at its heart is exactly this line.</p>
+
+<section class="summary">
+<h2>What you now know</h2>
+<ul>
+<li>A texture is a grid of texels. <code>texture(s, uv)</code> reads with normalized coordinates and filtering; <code>texelFetch(s, ivec2, 0)</code> reads one exact texel.</li>
+<li>A pass can draw into a texture (a framebuffer). Reading it back next frame gives memory; two textures take turns (ping-pong).</li>
+<li>In this course, Buffer A reads its own last frame on iChannel0, and Image reads Buffer A.</li>
+<li>Initialize on <code>iFrame == 0</code>. Fading by a fraction per frame is exponential decay.</li>
+<li>Feedback: read the past at transformed coordinates.</li>
+<li>Cellular automata and reaction-diffusion: simple local rules over neighbors, every cell at once. The Laplacian is "neighbor average minus me".</li>
+<li>Advection: each pixel copies the color from upstream. Curl noise flows around hills instead of up them.</li>
+</ul>
+</section>
+
+<div class="try"><span class="box-t">Exercises</span>
+<p><b>1.</b> In <code>trails</code>, make the old picture drift upward a little each frame, like smoke rising.</p>
+<details><summary>Hint</summary><div><pre class="snip"><code>vec3 last = texture(iChannel0, uv - vec2(0.0, 0.002)).rgb;   // read from slightly below</code></pre></div></details>
+<p><b>2.</b> Start <code>life</code> with a single glider instead of random soup. A glider is five cells: (1, 0), (2, 1), (0, 2), (1, 2), (2, 2), relative to a starting corner.</p>
+<p><b>3.</b> In <code>turing</code>, let feed vary across the screen and kill vary down it, to see a whole map of possible patterns at once.</p>
+<details><summary>Solution</summary><div><pre class="snip"><code>vec2 uv = fragCoord / iResolution.xy;
+float feed = mix(0.01, 0.10, uv.x);
+float kill = mix(0.045, 0.07, uv.y);</code></pre></div></details>
+<p><b>4.</b> In <code>flow</code>, replace the three taps with a single ring of dye at the start (iFrame == 0) and watch it get stretched.</p>
+</div>
+<p><b>Go deeper:</b> <a href="https://www.karlsims.com/rd.html" target="_blank" rel="noopener">Karl Sims' reaction-diffusion tutorial</a>, <a href="https://conwaylife.com/wiki/Main_Page" target="_blank" rel="noopener">the LifeWiki</a> for everything Game of Life, and <a href="https://developer.nvidia.com/gpugems/gpugems/part-vi-beyond-triangles/chapter-38-fast-fluid-dynamics-simulation-gpu" target="_blank" rel="noopener">GPU Gems, Fast Fluid Dynamics Simulation on the GPU</a>, the classic article on real fluids in shaders.</p>
+
+<nav class="ch-nav" aria-label="Chapters"><a href="14-shadows-and-worlds.html"><small>← Chapter 14</small><b>3D, part 2: shadows, atmosphere and worlds</b></a><a class="next" href="16-sound.html"><small>Chapter 16 →</small><b>Music-reactive visuals</b></a></nav>
+</article>
+</div></div>
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="../assets/reference.js"></script><script src="../assets/engine.js"></script><script src="../assets/editor.js"></script><script src="../assets/widgets.js"></script><script src="../assets/site.js"></script>
+</body>
+</html>

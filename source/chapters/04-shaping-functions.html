@@ -1,0 +1,335 @@
+<!--meta
+{"num": 4, "slug": "shaping-functions", "part": 1, "title": "Shaping functions: drawing with math", "summary": "Graphs, and the everyday toolbox: step, smoothstep, clamp, abs, floor, fract, mod and mix.", "hero": "plot-smoothstep", "start": "plot-x"}
+-->
+<p class="lede">Almost every visual effect is a curve in disguise: a soft edge is a curve that rises quickly, a stripe is a curve that repeats, a glow is a curve that falls away. This chapter builds a little function plotter out of a shader, then uses it to meet the built-in shaping functions one at a time, each with its picture and its formula.</p>
+
+<h2 id="functions">Functions as machines</h2>
+<p>In math, a <b>function</b> is a machine: a number goes in, a number comes out, and the same input always gives the same output. We write <i>y = f(x)</i>: put x in, get y out. A shader's <code>mainImage</code> is a function too, just a bigger one: position in, color out.</p>
+<aside class="math" title="Math from zero: the graph of a function">
+<p>To see a function at a glance, draw its <b>graph</b>. For each x along the horizontal axis, go up to the height f(x) and put a dot there. Join the dots and you have a curve whose shape tells you how the function behaves: where it rises, where it's flat, where it jumps.</p>
+<p>For example, for f(x) = x × x: at x = 0 the dot is at height 0, at x = 0.5 at height 0.25, at x = 1 at height 1. The curve starts flat and bends upward.</p>
+</aside>
+
+<h2 id="plotting">Drawing a graph in a shader</h2>
+<p>In p5 you'd draw a graph by looping over x and drawing line segments. A shader can't draw lines, so turn the question around, as always: each pixel asks <b>“is my y close to f(my x)?”</b> If yes, it lights up. Together, the lit pixels trace the curve.</p>
+<p>Here's the plotter you'll use for the rest of this chapter. The only part you need to change is the function <code>f</code> at the top:</p>
+<script type="text/x-glsl" data-ex="plot-x" data-title="A function plotter, showing f(x) = x">
+// The function to draw. Change it!
+float f(float x) {
+    return x;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    // View: centered on (0.5, 0.5), y from -0.2 to 1.2, x a little wider.
+    vec2 p = (fragCoord - 0.5 * iResolution.xy) / iResolution.y * 1.4 + 0.5;
+    float px = 1.4 / iResolution.y;                  // the size of one pixel in these units
+
+    vec3 col = vec3(0.07, 0.08, 0.1);
+    vec2 g = abs(fract(p * 10.0 + 0.5) - 0.5) / 10.0;               // faint grid every 0.1
+    col += 0.06 * (1.0 - smoothstep(0.0, px, min(g.x, g.y)));
+    vec2 a = min(abs(p), abs(p - 1.0));                             // brighter lines at 0 and 1
+    col += 0.25 * (1.0 - smoothstep(0.0, 1.5 * px, min(a.x, a.y)));
+
+    // How far is this pixel from the curve? (vertical gap, corrected for steepness)
+    float y = f(p.x);
+    float slope = (f(p.x + px) - f(p.x - px)) / (2.0 * px);
+    float d = abs(p.y - y) / sqrt(1.0 + slope * slope);
+    col = mix(col, vec3(1.0, 0.65, 0.2), 1.0 - smoothstep(0.0, 2.0 * px, d));
+
+    fragColor = vec4(col, 1.0);
+}
+</script>
+<p>The bright lines mark 0 and 1 on each axis, so the square between them is the range 0..1 that shaders use most. The faint grid is every 0.1. Reading the code from the top of <code>mainImage</code>:</p>
+<ul>
+<li>The first line is the centered-coordinates line from Chapter 3, zoomed out by 1.4 and shifted by 0.5, so the 0..1 square sits in the middle with some room around it.</li>
+<li><code>px</code> is the size of one pixel in these units, so lines can be drawn about one pixel thick at any canvas size.</li>
+<li>The grid lines use functions from later in this chapter. Skip them for now.</li>
+<li>The last block measures how far this pixel is from the curve and colors it orange if it's close. Measuring straight up and down would make steep parts of the curve look thin, so the gap is divided by how steep the curve is there. That's why it has an even thickness everywhere.</li>
+</ul>
+<p>Load it into the workbench and change <code>return x;</code> as you read. Every function below is one line in <code>f</code>.</p>
+
+<h2 id="lines">Straight lines: slope and offset</h2>
+<p><code>return x;</code> draws a diagonal: output equals input. Two moves change it, the same two from the ramps in Chapter 2:</p>
+<ul>
+<li><b>Multiply</b> to change the steepness, called the <b>slope</b>: <code>2.0 * x</code> rises twice as fast; <code>0.5 * x</code> half as fast; <code>-x</code> goes down.</li>
+<li><b>Add</b> to slide the line up or down, called the <b>offset</b>: <code>x + 0.2</code> is the same line, 0.2 higher.</li>
+</ul>
+<script type="text/x-glsl" data-ex="plot-linear" data-title="f(x) = 2x − 0.5: twice as steep, shifted down">
+float f(float x) {
+    return 2.0 * x - 0.5;   // slope 2, offset -0.5
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 p = (fragCoord - 0.5 * iResolution.xy) / iResolution.y * 1.4 + 0.5;
+    float px = 1.4 / iResolution.y;
+    vec3 col = vec3(0.07, 0.08, 0.1);
+    vec2 g = abs(fract(p * 10.0 + 0.5) - 0.5) / 10.0;
+    col += 0.06 * (1.0 - smoothstep(0.0, px, min(g.x, g.y)));
+    vec2 a = min(abs(p), abs(p - 1.0));
+    col += 0.25 * (1.0 - smoothstep(0.0, 1.5 * px, min(a.x, a.y)));
+    float y = f(p.x);
+    float slope = (f(p.x + px) - f(p.x - px)) / (2.0 * px);
+    float d = abs(p.y - y) / sqrt(1.0 + slope * slope);
+    col = mix(col, vec3(1.0, 0.65, 0.2), 1.0 - smoothstep(0.0, 2.0 * px, d));
+    fragColor = vec4(col, 1.0);
+}
+</script>
+<p>Any straight line can be written as <i>y = a·x + b</i>, with slope a and offset b. Remapping a range (Chapter 3) is just picking the a and b that send your start and end where you want them.</p>
+
+<h2 id="curves">Curves: powers and roots</h2>
+<p>Multiplying x by <em>itself</em> bends the line. Inside 0..1 this is especially useful, because a number between 0 and 1 gets <em>smaller</em> when you multiply it by itself: 0.5 × 0.5 = 0.25. So <code>x * x</code> starts slowly and speeds up, while both ends stay put, because 0 × 0 = 0 and 1 × 1 = 1.</p>
+<aside class="math" title="Math from zero: powers">
+<p>x² (“x squared”) is x × x. x³ is x × x × x. In GLSL, <code>pow(x, 2.0)</code> means x², and the power doesn't have to be a whole number: <code>pow(x, 0.5)</code> is the square root, √x, the number that gives x when multiplied by itself (√0.25 = 0.5).</p>
+<p>On 0..1, powers above 1 sag below the diagonal (slow start, fast finish) and powers below 1 bulge above it (fast start, slow finish). Animators call these curves <b>easing</b>.</p>
+</aside>
+<script type="text/x-glsl" data-ex="plot-pow" data-title="f(x) = pow(x, 2.0): a slow start">
+float f(float x) {
+    return pow(x, 2.0);    // try 0.5, 3.0, 8.0. Then try x * x and compare left of 0.
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 p = (fragCoord - 0.5 * iResolution.xy) / iResolution.y * 1.4 + 0.5;
+    float px = 1.4 / iResolution.y;
+    vec3 col = vec3(0.07, 0.08, 0.1);
+    vec2 g = abs(fract(p * 10.0 + 0.5) - 0.5) / 10.0;
+    col += 0.06 * (1.0 - smoothstep(0.0, px, min(g.x, g.y)));
+    vec2 a = min(abs(p), abs(p - 1.0));
+    col += 0.25 * (1.0 - smoothstep(0.0, 1.5 * px, min(a.x, a.y)));
+    float y = f(p.x);
+    float slope = (f(p.x + px) - f(p.x - px)) / (2.0 * px);
+    float d = abs(p.y - y) / sqrt(1.0 + slope * slope);
+    col = mix(col, vec3(1.0, 0.65, 0.2), 1.0 - smoothstep(0.0, 2.0 * px, d));
+    fragColor = vec4(col, 1.0);
+}
+</script>
+<p>Notice that the curve vanishes to the left of 0. <code>pow</code> is undefined for negative numbers: the GPU returns garbage, usually NaN (“not a number”), and NaN never counts as “close to the curve”. <code>x * x</code> doesn't have this problem, so for squares and cubes prefer plain multiplication. This is your first taste of a theme from Chapter 19: when part of a picture mysteriously disappears, look for undefined math.</p>
+
+<h2 id="step">step: a hard switch</h2>
+<p><code>step(edge, x)</code> is the simplest decision there is. It returns 0.0 when x is below the edge and 1.0 once x reaches it:</p>
+<div class="formula">step(edge, x)  =  x &lt; edge ? 0.0 : 1.0</div>
+<script type="text/x-glsl" data-ex="plot-step" data-title="f(x) = step(0.5, x)">
+float f(float x) {
+    return step(0.5, x);   // the edge comes FIRST
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 p = (fragCoord - 0.5 * iResolution.xy) / iResolution.y * 1.4 + 0.5;
+    float px = 1.4 / iResolution.y;
+    vec3 col = vec3(0.07, 0.08, 0.1);
+    vec2 g = abs(fract(p * 10.0 + 0.5) - 0.5) / 10.0;
+    col += 0.06 * (1.0 - smoothstep(0.0, px, min(g.x, g.y)));
+    vec2 a = min(abs(p), abs(p - 1.0));
+    col += 0.25 * (1.0 - smoothstep(0.0, 1.5 * px, min(a.x, a.y)));
+    float y = f(p.x);
+    float slope = (f(p.x + px) - f(p.x - px)) / (2.0 * px);
+    float d = abs(p.y - y) / sqrt(1.0 + slope * slope);
+    col = mix(col, vec3(1.0, 0.65, 0.2), 1.0 - smoothstep(0.0, 2.0 * px, d));
+    fragColor = vec4(col, 1.0);
+}
+</script>
+<p>Watch the argument order: the edge comes first, then the value. <code>step</code> replaces many small <code>if</code> statements with math, which GPUs like, and it gives you a number you can multiply with: <code>col * step(0.5, uv.x)</code> keeps the color only on the right half. Two useful variations: <code>1.0 - step(e, x)</code> flips it (1 below the edge), and <code>step(a, x) - step(b, x)</code> is 1 only between a and b.</p>
+
+<h2 id="smoothstep">smoothstep: a soft switch</h2>
+<p>A hard switch gives hard, jagged edges. <code>smoothstep(edge0, edge1, x)</code> is a switch that takes its time: 0 below edge0, 1 above edge1, and a smooth S-shaped ramp in between.</p>
+<script type="text/x-glsl" data-ex="plot-smoothstep" data-title="f(x) = smoothstep(0.2, 0.8, x)">
+float f(float x) {
+    return smoothstep(0.2, 0.8, x);   // try moving the edges closer together
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 p = (fragCoord - 0.5 * iResolution.xy) / iResolution.y * 1.4 + 0.5;
+    float px = 1.4 / iResolution.y;
+    vec3 col = vec3(0.07, 0.08, 0.1);
+    vec2 g = abs(fract(p * 10.0 + 0.5) - 0.5) / 10.0;
+    col += 0.06 * (1.0 - smoothstep(0.0, px, min(g.x, g.y)));
+    vec2 a = min(abs(p), abs(p - 1.0));
+    col += 0.25 * (1.0 - smoothstep(0.0, 1.5 * px, min(a.x, a.y)));
+    float y = f(p.x);
+    float slope = (f(p.x + px) - f(p.x - px)) / (2.0 * px);
+    float d = abs(p.y - y) / sqrt(1.0 + slope * slope);
+    col = mix(col, vec3(1.0, 0.65, 0.2), 1.0 - smoothstep(0.0, 2.0 * px, d));
+    fragColor = vec4(col, 1.0);
+}
+</script>
+<aside class="math" title="Math from zero: where the S-curve comes from">
+<p>smoothstep works in two stages. First it rescales x so that edge0 becomes 0 and edge1 becomes 1, and clamps anything outside: <code>t = clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0)</code>. That's a straight ramp. Then it bends the ramp with a curve:</p>
+<div class="formula">smoothstep = t * t * (3.0 - 2.0 * t)          (that's 3t² − 2t³)</div>
+<p>Why that curve? We want something that goes from 0 to 1 like the ramp, but starts and ends <em>flat</em>, so it joins the flat parts outside the edges without a kink. The simplest polynomial that is 0 at t = 0, 1 at t = 1, and flat at both ends is exactly 3t² − 2t³. You can check two of those: at t = 0 it's 0, and at t = 1 it's 3 − 2 = 1. That flatness is why smoothstep looks so natural, and you'll meet this same curve again inside noise in Chapter 11.</p>
+</aside>
+<p>Its most important use is <b>soft edges</b>. When edge0 and edge1 are very close together, about one pixel apart, smoothstep is an almost-hard switch whose tiny ramp hides the jagged staircase of pixels. Compare a hard edge with a soft one:</p>
+<script type="text/x-glsl" data-ex="edges" data-title="Hard edge (top) versus smoothstep edge (bottom)">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+
+    float edge = 0.3 * uv.x;                 // a slanted boundary
+    float hard = step(edge, uv.y);           // 0 or 1, nothing in between
+    float soft = smoothstep(edge - 0.15, edge + 0.15, uv.y);   // a wide, soft ramp
+
+    float v = uv.y > 0.0 ? hard : soft;      // top half hard, bottom half soft
+    fragColor = vec4(vec3(v), 1.0);
+}
+</script>
+<p>Here the soft ramp is deliberately wide so you can see it. Make the 0.15s small, like 0.005, and you get an edge that looks crisp but not jagged. Chapter 8 shows how to make it exactly one pixel wide.</p>
+<aside class="warn" title="Watch out: edge order"><p>The GLSL specification says smoothstep's result is undefined when edge0 is not smaller than edge1. Many GPUs happen to give a flipped curve for <code>smoothstep(0.8, 0.2, x)</code>, but some don't. To go from 1 down to 0, write <code>1.0 - smoothstep(0.2, 0.8, x)</code> instead.</p></aside>
+
+<h2 id="limits">Limiting values: min, max, clamp, abs</h2>
+<ul>
+<li><code>min(a, b)</code> returns whichever is smaller, so <code>min(x, 0.7)</code> follows x until 0.7 and then stays there: a ceiling.</li>
+<li><code>max(a, b)</code> returns the larger, so <code>max(x, 0.2)</code> is a floor at 0.2.</li>
+<li><code>clamp(x, lo, hi)</code> does both: <code>min(max(x, lo), hi)</code>. <code>clamp(x, 0.0, 1.0)</code> is the classic way to make a value safe for a color.</li>
+<li><code>abs(x)</code>, the <b>absolute value</b>, drops the minus sign: abs(-0.3) = 0.3. Its graph is a V. It answers “how far is x from 0, in either direction?”, which makes it the key to symmetry (Chapter 10) and to outlines (Chapter 8).</li>
+</ul>
+<script type="text/x-glsl" data-ex="plot-abs" data-title="f(x) = abs(x − 0.5) × 2: a V centered at 0.5">
+float f(float x) {
+    return abs(x - 0.5) * 2.0;   // distance from 0.5, doubled. Try clamp(x, 0.2, 0.7) too.
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 p = (fragCoord - 0.5 * iResolution.xy) / iResolution.y * 1.4 + 0.5;
+    float px = 1.4 / iResolution.y;
+    vec3 col = vec3(0.07, 0.08, 0.1);
+    vec2 g = abs(fract(p * 10.0 + 0.5) - 0.5) / 10.0;
+    col += 0.06 * (1.0 - smoothstep(0.0, px, min(g.x, g.y)));
+    vec2 a = min(abs(p), abs(p - 1.0));
+    col += 0.25 * (1.0 - smoothstep(0.0, 1.5 * px, min(a.x, a.y)));
+    float y = f(p.x);
+    float slope = (f(p.x + px) - f(p.x - px)) / (2.0 * px);
+    float d = abs(p.y - y) / sqrt(1.0 + slope * slope);
+    col = mix(col, vec3(1.0, 0.65, 0.2), 1.0 - smoothstep(0.0, 2.0 * px, d));
+    fragColor = vec4(col, 1.0);
+}
+</script>
+
+<h2 id="repeat">Staircases and saws: floor, fract, mod</h2>
+<p>These three are the engine of every repeating pattern in the course.</p>
+<ul>
+<li><code>floor(x)</code> rounds <em>down</em> to a whole number: floor(2.7) = 2.0, floor(-0.3) = -1.0. Its graph is a staircase. <code>ceil</code> rounds up, <code>round</code> to the nearest.</li>
+<li><code>fract(x)</code> keeps only the part after the decimal point: fract(2.7) = 0.7. It's exactly <code>x - floor(x)</code>, so it always lies between 0 and 1. Its graph is a <b>sawtooth</b>: it climbs from 0 to 1, drops back to 0, and climbs again, forever.</li>
+<li><code>mod(x, m)</code> is the remainder after dividing by m: <code>x - m * floor(x / m)</code>. It's a sawtooth from 0 to m instead of 0 to 1. <code>fract(x)</code> is the same as <code>mod(x, 1.0)</code>.</li>
+</ul>
+<script type="text/x-glsl" data-ex="plot-fract" data-title="f(x) = fract(x × 3): a sawtooth that repeats 3 times per unit">
+float f(float x) {
+    return fract(x * 3.0);   // try floor(x * 3.0) / 3.0, then mod(x, 0.4)
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 p = (fragCoord - 0.5 * iResolution.xy) / iResolution.y * 1.4 + 0.5;
+    float px = 1.4 / iResolution.y;
+    vec3 col = vec3(0.07, 0.08, 0.1);
+    vec2 g = abs(fract(p * 10.0 + 0.5) - 0.5) / 10.0;
+    col += 0.06 * (1.0 - smoothstep(0.0, px, min(g.x, g.y)));
+    vec2 a = min(abs(p), abs(p - 1.0));
+    col += 0.25 * (1.0 - smoothstep(0.0, 1.5 * px, min(a.x, a.y)));
+    float y = f(p.x);
+    float slope = (f(p.x + px) - f(p.x - px)) / (2.0 * px);
+    float d = abs(p.y - y) / sqrt(1.0 + slope * slope);
+    col = mix(col, vec3(1.0, 0.65, 0.2), 1.0 - smoothstep(0.0, 2.0 * px, d));
+    fragColor = vec4(col, 1.0);
+}
+</script>
+<p>Here's why fract matters so much: whatever you draw using <code>fract(x * 3.0)</code> instead of x gets drawn three times, because the input runs from 0 to 1 three times. Feed it to step and you get stripes: <code>step(0.5, fract(x * 3.0))</code>. Do it to x and y together and you get a grid. That's all of Chapter 10 in one sentence.</p>
+<p>A neat variation: <code>abs(fract(x) - 0.5)</code> turns the saw into a <b>triangle wave</b>, which goes up and down smoothly without the sudden drop. Its value is the distance to the nearest half-integer, and the grid lines in the plotter use exactly this trick.</p>
+
+<h2 id="mix">Sliding between values: mix</h2>
+<p>You've used <code>mix</code> in every plotter above. <code>mix(a, b, t)</code> slides from a to b as t goes from 0 to 1. It's called <b>linear interpolation</b> (often shortened to “lerp”).</p>
+<aside class="math" title="Math from zero: linear interpolation">
+<p>To get from a to b you have to travel a distance of b − a. Travel a fraction t of that distance, starting at a:</p>
+<div class="formula">mix(a, b, t)  =  a + (b - a) * t</div>
+<p>At t = 0 you're still at a. At t = 1 you've traveled the whole way: a + b − a = b. At t = 0.5 you're halfway. The same formula is sometimes written a × (1 − t) + b × t, which says “a little less of a, a little more of b”. They're equal; multiply out the brackets to check.</p>
+</aside>
+<div data-widget="mix"></div>
+<p>Because vector math works slot by slot, mix works on colors too, which makes it the standard way to build gradients:</p>
+<script type="text/x-glsl" data-ex="mix-colors" data-title="mix between two colors, shaped by smoothstep">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+
+    vec3 deep = vec3(0.05, 0.15, 0.45);    // night blue
+    vec3 warm = vec3(1.0, 0.55, 0.25);     // sunset orange
+
+    float t = uv.y;                                 // top half: a plain straight blend
+    if (uv.x > 0.5) t = smoothstep(0.3, 0.7, uv.y); // right half: shaped by smoothstep
+
+    fragColor = vec4(mix(warm, deep, t), 1.0);
+}
+</script>
+<p>Both halves blend the same two colors. On the right, smoothstep reshapes t so the blend happens in a narrower band with soft ends. Shaping the <em>t</em> of a mix is how you control where a gradient happens.</p>
+
+<h2 id="combine">Combining functions: bumps, pulses and falloffs</h2>
+<p>Functions are building blocks. You can add them, subtract them, and feed one into another:</p>
+<ul>
+<li><b>A plateau:</b> rise with one smoothstep, fall with another: <code>smoothstep(0.2, 0.3, x) - smoothstep(0.6, 0.7, x)</code>. 1 in the middle, 0 outside, soft shoulders.</li>
+<li><b>Nesting:</b> <code>f(g(x))</code>. For instance <code>smoothstep(0.0, 1.0, fract(x * 4.0))</code> is a repeating soft ramp.</li>
+<li><b>Exponential falloff:</b> <code>exp(-x * k)</code> starts at 1 and fades toward 0, faster for bigger k. It's how light fades in fog (Chapter 14).</li>
+<li><b>Inverse falloff:</b> <code>0.05 / x</code> is huge near 0 and fades quickly. It's how a glow looks (Chapter 8).</li>
+</ul>
+<script type="text/x-glsl" data-ex="plot-bump" data-title="A plateau built from two smoothsteps">
+float f(float x) {
+    return smoothstep(0.2, 0.3, x) - smoothstep(0.6, 0.7, x);   // try exp(-x * 4.0) or 0.05 / x
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 p = (fragCoord - 0.5 * iResolution.xy) / iResolution.y * 1.4 + 0.5;
+    float px = 1.4 / iResolution.y;
+    vec3 col = vec3(0.07, 0.08, 0.1);
+    vec2 g = abs(fract(p * 10.0 + 0.5) - 0.5) / 10.0;
+    col += 0.06 * (1.0 - smoothstep(0.0, px, min(g.x, g.y)));
+    vec2 a = min(abs(p), abs(p - 1.0));
+    col += 0.25 * (1.0 - smoothstep(0.0, 1.5 * px, min(a.x, a.y)));
+    float y = f(p.x);
+    float slope = (f(p.x + px) - f(p.x - px)) / (2.0 * px);
+    float d = abs(p.y - y) / sqrt(1.0 + slope * slope);
+    col = mix(col, vec3(1.0, 0.65, 0.2), 1.0 - smoothstep(0.0, 2.0 * px, d));
+    fragColor = vec4(col, 1.0);
+}
+</script>
+
+<h2 id="paint">Painting with functions</h2>
+<p>So far we've drawn graphs. The real use of these functions is shaping the numbers that become colors. Here the same left-to-right ramp is shaped four different ways, one per band, and the bands look completely different even though they all come from <code>uv.x</code>:</p>
+<script type="text/x-glsl" data-ex="paint" data-title="One ramp, four shapes">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    float x = uv.x;
+
+    float v;
+    if (uv.y < 0.25)      v = x;                                  // straight
+    else if (uv.y < 0.5)  v = x * x * x;                          // slow start
+    else if (uv.y < 0.75) v = smoothstep(0.45, 0.55, x);          // nearly a switch
+    else                  v = step(0.5, fract(x * 8.0));          // eight stripes
+
+    vec3 col = mix(vec3(0.1, 0.12, 0.3), vec3(1.0, 0.75, 0.4), v);
+    fragColor = vec4(col, 1.0);
+}
+</script>
+<aside class="aha"><p>Every visual effect is a curve. If you can plot a function, you can paint with it: feed it a coordinate, and use what comes out as a brightness, a mix amount, a size or a position.</p></aside>
+
+<section class="summary">
+<h2>What you now know</h2>
+<ul>
+<li>A shader can draw a graph by asking each pixel whether its y is close to f(its x).</li>
+<li>Multiplying changes slope, adding changes offset; powers bend a 0..1 ramp into easing curves.</li>
+<li><code>step(edge, x)</code> is a hard switch; <code>smoothstep(e0, e1, x)</code> a soft one, using 3t² − 2t³.</li>
+<li><code>min</code>, <code>max</code>, <code>clamp</code> limit values; <code>abs</code> folds negatives and measures distance from 0.</li>
+<li><code>floor</code> makes staircases, <code>fract</code> and <code>mod</code> make sawtooths, the engine of repetition.</li>
+<li><code>mix(a, b, t) = a + (b − a) × t</code> slides between numbers or colors.</li>
+<li>Functions combine: subtract smoothsteps for a plateau, nest them, use <code>exp(-x)</code> or <code>1/x</code> for falloffs.</li>
+</ul>
+</section>
+
+<div class="try" title="Exercises">
+<p><b>1.</b> In the plotter, draw a curve that is 0 until x = 0.3, rises smoothly to 1 at x = 0.5, and stays at 1.</p>
+<details><summary>Solution</summary><div><script type="text/x-glsl-snippet">
+return smoothstep(0.3, 0.5, x);
+</script></div></details>
+<p><b>2.</b> Draw a triangle wave that repeats 4 times between 0 and 1 and goes from 0 to 1 and back.</p>
+<details><summary>Hint</summary><div><p><code>abs(fract(x) - 0.5)</code> goes from 0.5 down to 0 and back up. Multiply by 2 to make it reach 1, and feed it <code>x * 4.0</code>.</p></div></details>
+<details><summary>Solution</summary><div><script type="text/x-glsl-snippet">
+return abs(fract(x * 4.0) - 0.5) * 2.0;
+</script></div></details>
+<p><b>3.</b> Paint the canvas with five vertical stripes whose edges are soft rather than hard.</p>
+<details><summary>Solution</summary><div><script type="text/x-glsl-snippet">
+vec2 uv = fragCoord / iResolution.xy;
+float s = smoothstep(0.4, 0.6, abs(fract(uv.x * 5.0) - 0.5) * 2.0);
+fragColor = vec4(vec3(s), 1.0);
+</script></div></details>
+</div>
+<p><b>Go deeper:</b> <a href="https://graphtoy.com/" target="_blank" rel="noopener">Graphtoy</a> plots any function instantly. <a href="https://thebookofshaders.com/05/" target="_blank" rel="noopener">The Book of Shaders, chapter 5</a> is all about shaping functions.</p>

@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>2. The language: numbers, vectors, functions · Shader Fragments</title>
+<meta name="description" content="Types, the 1.0 rule, vectors and swizzling, writing functions, if and for.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="../assets/icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+
+</head>
+<body data-page="chapter" data-root="..">
+<header class="top"><div class="top-in">
+  <a class="logo" href="../index.html"><span class="logo-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="word">Shader Fragments</span></a>
+  <nav class="nav" aria-label="Main"><a href="../index.html#contents">Contents</a><a href="../reference.html">Reference</a><a href="../playground.html">Playground</a></nav>
+</div></header>
+<main>
+<div class="wrap"><div class="chapter">
+<header class="ch-head">
+  <p class="eyebrow"><b>Part I · Foundations</b> · Chapter 2</p>
+  <h1>The language: numbers, vectors, functions</h1>
+  <p class="lede">GLSL is a small language, and you can learn nearly all of it in one sitting. It's strict in a few places where JavaScript is relaxed, and those few places cause most beginner errors, so this chapter goes through them carefully. Everything here is also in the <a href="../reference.html">reference</a>, and you can hover any word in the workbench to see what it means.</p>
+  <details class="ch-toc" open><summary>In this chapter</summary><ol><li><a href="#statements">Instructions, semicolons and comments</a></li><li><a href="#variables">Variables have types</a></li><li><a href="#int-float">Whole numbers and decimals: the 1.0 rule</a></li><li><a href="#arithmetic">Arithmetic</a></li><li><a href="#vectors">Vectors: numbers that travel together</a></li><li><a href="#swizzling">Reading parts: .x, .rgb and swizzling</a></li><li><a href="#vector-math">Math on vectors happens part by part</a></li><li><a href="#functions">Writing your own functions</a></li><li><a href="#builtins">Built-in functions</a></li><li><a href="#control">Making decisions and repeating</a></li></ol></details>
+</header>
+<aside class="stage" id="workbench" data-start="int-float" aria-label="Workbench: live shader and code"></aside>
+<article class="ch-body">
+
+
+
+<h2 id="statements"><span class="sec-n">2.1</span>Instructions, semicolons and comments</h2>
+<p>A shader is a list of instructions, called <b>statements</b>, run from top to bottom. Each one ends with a semicolon. Spaces and line breaks don't matter to the computer, so you can lay code out however reads best.</p>
+<pre class="snip"><code>float a = 1.0;      // a statement, ended by ;
+float b = a + 2.0;  // another one
+
+/* A comment can also span
+   several lines like this. */</code></pre>
+<p>Two more rules: GLSL is <b>case-sensitive</b> (<code>iTime</code> works, <code>itime</code> is an unknown name), and code runs top to bottom, so you have to create something before you use it.</p>
+
+<h2 id="variables"><span class="sec-n">2.2</span>Variables have types</h2>
+<p>A <b>variable</b> is a named box that holds a value. In GLSL, you must say what kind of value the box holds, called its <b>type</b>, when you create it:</p>
+<pre class="snip"><code>float brightness = 0.75;   // type, name, =, value, ;
+int count = 3;
+bool isInside = true;</code></pre>
+<p>The three basic types:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>type</th><th>holds</th><th>examples</th></tr></thead>
+<tbody>
+<tr><td><code>float</code></td><td>a number with a fractional part (“floating point”)</td><td><code>0.5</code>, <code>3.0</code>, <code>-0.25</code></td></tr>
+<tr><td><code>int</code></td><td>a whole number (an “integer”)</td><td><code>0</code>, <code>7</code>, <code>-3</code></td></tr>
+<tr><td><code>bool</code></td><td>true or false (a “boolean”)</td><td><code>true</code>, <code>false</code>, <code>x &gt; 0.5</code></td></tr>
+</tbody>
+</table></div>
+<p>Once a variable is created, its type never changes. You can change its value, as long as the new value has the same type:</p>
+<pre class="snip"><code>float x = 0.5;
+x = x * 2.0;     // fine: x is now 1.0. No type in front, because x already exists.
+float x = 3.0;   // error: "redefinition". x already exists in this block.</code></pre>
+<p>Names can contain letters, digits and underscores, but can't start with a digit. A few ordinary-looking words are <b>reserved</b> in GLSL and can't be used as names: <code>smooth</code>, <code>flat</code>, <code>sample</code>, <code>filter</code>, <code>input</code>, <code>output</code>, <code>half</code>, among others. If you get a strange error on a line that looks fine, a reserved name is a likely cause.</p>
+<p>Add <code>const</code> in front for values that never change, which also documents your intent: <code>const float PI = 3.14159265;</code>.</p>
+
+<h2 id="int-float"><span class="sec-n">2.3</span>Whole numbers and decimals: the 1.0 rule</h2>
+<p>This is the rule that trips up everyone coming from JavaScript. In JavaScript, <code>1</code> and <code>1.0</code> are the same number. In GLSL, <code>1</code> is an <code>int</code> and <code>1.0</code> is a <code>float</code>, and GLSL will <b>not</b> convert one into the other for you:</p>
+<pre class="snip"><code>float a = 1;           // error: cannot convert from 'const int' to 'float'
+float b = 1.0;         // fine
+float c = 2.0 * 3;     // error: float times int
+float d = 2.0 * 3.0;   // fine</code></pre>
+<p>So write the decimal point every time you mean a float, even for whole numbers. <code>1.</code> also works, but <code>1.0</code> is easier to read.</p>
+<p>When you do need to convert, do it out loud: <code>float(i)</code> turns an int into a float, and <code>int(x)</code> turns a float into an int by dropping the fraction (2.9 becomes 2). Here's an example that uses both. It splits the canvas into 8 columns, works out which column a pixel is in as an int, then turns that back into a brightness:</p>
+<figure class="ex" id="ex-int-float" data-ex="int-float" data-label="Example 2.1" data-title="int() drops the fraction, float() converts back" data-cfg='{}'><figcaption><span class="ex-n">Example 2.1</span><span>int() drops the fraction, float() converts back</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    float x = fragCoord.x / iResolution.x;   // 0.0 → 1.0 across the canvas
+
+    int column = int(x * 8.0);               // 0, 1, 2 … 7: the fraction is dropped
+    float shade = float(column) / 7.0;       // back to a float: 0.0, 0.14 … 1.0
+
+    fragColor = vec4(shade, shade, shade, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    float x = fragCoord.x / iResolution.x;   // 0.0 → 1.0 across the canvas
+
+    int column = int(x * 8.0);               // 0, 1, 2 … 7: the fraction is dropped
+    float shade = float(column) / 7.0;       // back to a float: 0.0, 0.14 … 1.0
+
+    fragColor = vec4(shade, shade, shade, 1.0);
+}
+</script></figure>
+<p>The smooth ramp becomes a staircase of 8 steps, because <code>int()</code> throws away everything after the decimal point. A pixel at x = 0.37 computes 0.37 × 8 = 2.96, which becomes column 2.</p>
+<aside class="box warn"><span class="box-t">Watch out: integer division</span><p>Dividing two ints gives an int, and the fraction is thrown away: <code>7 / 2</code> is 3, and <code>1 / 2</code> is 0. If a value is mysteriously zero, look for an int division.</p></aside>
+
+<h2 id="arithmetic"><span class="sec-n">2.4</span>Arithmetic</h2>
+<p>The four operators <code>+ - * /</code> work as usual. Multiplication and division happen before addition and subtraction, so <code>1.0 + 2.0 * 3.0</code> is 7.0. Use parentheses whenever you want a different order, or just to make the order obvious.</p>
+<p>There are short forms for updating a variable: <code>x += 0.5</code> means <code>x = x + 0.5</code>, and likewise <code>-=</code>, <code>*=</code> and <code>/=</code>. <code>i++</code> adds 1 and <code>i--</code> subtracts 1.</p>
+<p>Every operation on a ramp from 0 to 1 does something visible. In this example the canvas is split into three horizontal bands, and each band shows a different calculation on the same ramp:</p>
+<figure class="ex" id="ex-arith" data-ex="arith" data-label="Example 2.2" data-title="Arithmetic on a ramp, one calculation per band" data-cfg='{}'><figcaption><span class="ex-n">Example 2.2</span><span>Arithmetic on a ramp, one calculation per band</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    float x = fragCoord.x / iResolution.x;   // 0 → 1 across
+    float y = fragCoord.y / iResolution.y;   // 0 → 1 up
+
+    float flipped = 1.0 - x;     // 1 → 0: bright on the left
+    float shifted = x + 0.25;    // 0.25 → 1.25: never black, reaches white early
+    float doubled = x * 2.0;     // 0 → 2: reaches white halfway across
+
+    float v = flipped;               // bottom band
+    if (y &gt; 0.333) v = shifted;      // middle band
+    if (y &gt; 0.666) v = doubled;      // top band
+
+    fragColor = vec4(v, v, v, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    float x = fragCoord.x / iResolution.x;   // 0 → 1 across
+    float y = fragCoord.y / iResolution.y;   // 0 → 1 up
+
+    float flipped = 1.0 - x;     // 1 → 0: bright on the left
+    float shifted = x + 0.25;    // 0.25 → 1.25: never black, reaches white early
+    float doubled = x * 2.0;     // 0 → 2: reaches white halfway across
+
+    float v = flipped;               // bottom band
+    if (y > 0.333) v = shifted;      // middle band
+    if (y > 0.666) v = doubled;      // top band
+
+    fragColor = vec4(v, v, v, 1.0);
+}
+</script></figure>
+<p>Read the bands from the bottom: <code>1.0 - x</code> reverses the ramp. <code>x + 0.25</code> shifts the whole ramp brighter, so the left edge is no longer black and white arrives early. <code>x * 2.0</code> makes it twice as steep, so it hits 1.0 halfway and is clamped to white after that. Adding moves a ramp; multiplying changes its steepness. You'll use those two moves constantly. (The <code>if</code> lines are explained at the end of this chapter.)</p>
+
+<h2 id="vectors"><span class="sec-n">2.5</span>Vectors: numbers that travel together</h2>
+<p>Many values in graphics come in groups: a position has an x and a y, a color has a red, a green and a blue. GLSL bundles them into <b>vectors</b>, and treats each bundle as a single value:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>type</th><th>holds</th><th>typical use</th></tr></thead>
+<tbody>
+<tr><td><code>vec2</code></td><td>2 floats</td><td>a position on the screen: (x, y)</td></tr>
+<tr><td><code>vec3</code></td><td>3 floats</td><td>a color (r, g, b), or a point in 3D (x, y, z)</td></tr>
+<tr><td><code>vec4</code></td><td>4 floats</td><td>a color with alpha: the type of <code>fragColor</code></td></tr>
+</tbody>
+</table></div>
+<p>You make a vector by writing its type like a function, with the parts inside. The parts have to add up to the right count, and you can build bigger vectors out of smaller ones:</p>
+<pre class="snip"><code>vec3 orange = vec3(1.0, 0.5, 0.0);   // three numbers
+vec3 grey   = vec3(0.5);             // one number fills all three: (0.5, 0.5, 0.5)
+vec2 p      = vec2(0.2, 0.7);
+vec3 q      = vec3(p, 1.0);          // a vec2 plus a float: (0.2, 0.7, 1.0)
+vec4 c      = vec4(orange, 1.0);     // a vec3 plus a float: a full color
+vec3 bad    = vec3(1.0, 0.5);        // error: two values for three slots</code></pre>
+<p>Since <code>fragCoord</code> is a vec2, and <code>iResolution.xy</code> is the width and height as a vec2, you can divide both at once:</p>
+<figure class="ex" id="ex-vec-build" data-ex="vec-build" data-label="Example 2.3" data-title="Building bigger vectors from smaller ones" data-cfg='{}'><figcaption><span class="ex-n">Example 2.3</span><span>Building bigger vectors from smaller ones</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;   // x / width and y / height in one go
+
+    vec3 col = vec3(uv, 0.5);               // red = uv.x, green = uv.y, blue = 0.5
+    fragColor = vec4(col, 1.0);             // plus alpha makes the vec4 the runner wants
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;   // x / width and y / height in one go
+
+    vec3 col = vec3(uv, 0.5);               // red = uv.x, green = uv.y, blue = 0.5
+    fragColor = vec4(col, 1.0);             // plus alpha makes the vec4 the runner wants
+}
+</script></figure>
+<p>The name <code>uv</code> is a tradition for coordinates that run from 0 to 1. It comes from texture mapping, where the letters u and v were used so they wouldn't be confused with x, y and z.</p>
+
+<h2 id="swizzling"><span class="sec-n">2.6</span>Reading parts: .x, .rgb and swizzling</h2>
+<p>To read one part of a vector, put a dot and its name after it. The parts have three sets of names, and you can use whichever reads best:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>slot</th><th>1st</th><th>2nd</th><th>3rd</th><th>4th</th><th>use for</th></tr></thead>
+<tbody>
+<tr><td>position names</td><td><code>.x</code></td><td><code>.y</code></td><td><code>.z</code></td><td><code>.w</code></td><td>points and directions</td></tr>
+<tr><td>color names</td><td><code>.r</code></td><td><code>.g</code></td><td><code>.b</code></td><td><code>.a</code></td><td>colors</td></tr>
+<tr><td>texture names</td><td><code>.s</code></td><td><code>.t</code></td><td><code>.p</code></td><td><code>.q</code></td><td>rarely used</td></tr>
+</tbody>
+</table></div>
+<p><code>col.r</code> and <code>col.x</code> are the same slot. Here's the useful part: you can name <em>several</em> slots at once, in any order, even repeating them, and get a new vector back. This is called <b>swizzling</b>:</p>
+<pre class="snip"><code>vec3 col = vec3(1.0, 0.5, 0.2);
+col.bgr    // (0.2, 0.5, 1.0): reversed
+col.rr     // (1.0, 1.0): a vec2 made of red twice
+col.xy     // (1.0, 0.5): the first two
+uv.yx      // swap x and y
+col.rg = vec2(0.0);   // you can also assign through a swizzle</code></pre>
+<p>The only rule: don't mix name sets in one swizzle (<code>col.rx</code> is an error). This example shows four versions of the same color field side by side:</p>
+<figure class="ex" id="ex-swizzle" data-ex="swizzle" data-label="Example 2.4" data-title="One color, four swizzles" data-cfg='{}'><figcaption><span class="ex-n">Example 2.4</span><span>One color, four swizzles</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    vec3 col = vec3(uv.x, uv.y, 0.2);
+
+    float column = floor(uv.x * 4.0);      // 0, 1, 2 or 3: which quarter of the canvas
+    if (column == 1.0) col = col.bgr;      // reversed
+    if (column == 2.0) col = col.gbr;      // rotated
+    if (column == 3.0) col = col.ggg;      // just green, shown as grey
+
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    vec3 col = vec3(uv.x, uv.y, 0.2);
+
+    float column = floor(uv.x * 4.0);      // 0, 1, 2 or 3: which quarter of the canvas
+    if (column == 1.0) col = col.bgr;      // reversed
+    if (column == 2.0) col = col.gbr;      // rotated
+    if (column == 3.0) col = col.ggg;      // just green, shown as grey
+
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<p><code>floor</code> rounds down to a whole number, giving 0, 1, 2 or 3 for the four quarters. You'll meet it properly in Chapter 4. The last column shows a handy debugging trick: <code>col.ggg</code> shows a single channel as a grey picture, so you can see exactly what that number is doing.</p>
+
+<h2 id="vector-math"><span class="sec-n">2.7</span>Math on vectors happens part by part</h2>
+<p>When you add, subtract, multiply or divide two vectors of the same size, GLSL does it slot by slot:</p>
+<div class="formula">vec2(1.0, 2.0) + vec2(3.0, 4.0)  =  vec2(1.0 + 3.0, 2.0 + 4.0)  =  vec2(4.0, 6.0)
+vec3(1.0, 0.5, 0.2) * vec3(0.5, 1.0, 0.0)  =  vec3(0.5, 0.5, 0.0)</div>
+<p>When you combine a vector with a single float, the float applies to every slot: <code>vec3(0.2, 0.4, 0.6) * 2.0</code> is <code>vec3(0.4, 0.8, 1.2)</code>. That's how you brighten or darken a whole color at once.</p>
+<p>Multiplying two colors slot by slot is exactly what a colored filter does to light. White light through blue glass: each channel of the light is multiplied by how much of that channel the glass lets through.</p>
+<figure class="ex" id="ex-componentwise" data-ex="componentwise" data-label="Example 2.5" data-title="Multiplying colors is filtering light" data-cfg='{}'><figcaption><span class="ex-n">Example 2.5</span><span>Multiplying colors is filtering light</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+
+    vec3 light = vec3(1.0, 0.9, 0.7);        // warm white light
+    vec3 glass = vec3(0.2, 0.6, 1.0);        // blue glass: lets through 20% red, 60% green, all blue
+
+    vec3 col = light;                        // left half: just the light
+    if (uv.x &gt; 0.5) col = light * glass;     // right half: light through the glass, slot by slot
+
+    col *= uv.y;                             // a vec3 times a float: darker toward the bottom
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+
+    vec3 light = vec3(1.0, 0.9, 0.7);        // warm white light
+    vec3 glass = vec3(0.2, 0.6, 1.0);        // blue glass: lets through 20% red, 60% green, all blue
+
+    vec3 col = light;                        // left half: just the light
+    if (uv.x > 0.5) col = light * glass;     // right half: light through the glass, slot by slot
+
+    col *= uv.y;                             // a vec3 times a float: darker toward the bottom
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<aside class="box note"><span class="box-t">Two different multiplications</span><p>Slot-by-slot multiplication is not the “dot product” from math class, which multiplies the slots and then adds them up into a single number. GLSL has a function for that, <code>dot()</code>, and Chapter 7 explains why it's so useful.</p></aside>
+
+<h2 id="functions"><span class="sec-n">2.8</span>Writing your own functions</h2>
+<p>A <b>function</b> is a named recipe you can reuse. You've already written one, <code>mainImage</code>. Here's the general shape:</p>
+<pre class="snip"><code>returnType name(type param1, type param2) {
+    // ... work ...
+    return someValue;   // must match returnType
+}</code></pre>
+<p>For example, a function that turns a number from 0 to 1 into a color between blue and orange:</p>
+<figure class="ex" id="ex-functions" data-ex="functions" data-label="Example 2.6" data-title="A function we wrote ourselves" data-cfg='{}'><figcaption><span class="ex-n">Example 2.6</span><span>A function we wrote ourselves</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>// Give it a value from 0 to 1, get back a color from cold blue to hot orange.
+vec3 heat(float t) {
+    vec3 cold = vec3(0.1, 0.2, 0.8);
+    vec3 hot  = vec3(1.0, 0.6, 0.1);
+    return cold + (hot - cold) * t;   // at t = 0: cold. At t = 1: cold + hot - cold = hot.
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    float t = fragCoord.x / iResolution.x;
+    fragColor = vec4(heat(t), 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+// Give it a value from 0 to 1, get back a color from cold blue to hot orange.
+vec3 heat(float t) {
+    vec3 cold = vec3(0.1, 0.2, 0.8);
+    vec3 hot  = vec3(1.0, 0.6, 0.1);
+    return cold + (hot - cold) * t;   // at t = 0: cold. At t = 1: cold + hot - cold = hot.
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    float t = fragCoord.x / iResolution.x;
+    fragColor = vec4(heat(t), 1.0);
+}
+</script></figure>
+<p>Some rules worth knowing:</p>
+<ul>
+<li><b>Define before use.</b> A function must appear above the code that calls it. That's why helper functions sit above <code>mainImage</code>.</li>
+<li><b>Parameters are copies.</b> By default a parameter is <code>in</code>: the function gets its own copy, so changing it inside the function doesn't affect the caller.</li>
+<li><b>out and inout.</b> An <code>out</code> parameter is an extra output that the function fills in, which is how <code>mainImage</code> hands back <code>fragColor</code>. An <code>inout</code> parameter is read and changed, and the caller sees the change.</li>
+<li><b>Same name, different types.</b> You may write several functions with the same name if their parameter types differ. GLSL picks the right one. Many built-ins work this way, which is why <code>abs</code> accepts a float or any vector.</li>
+<li><b>No recursion.</b> A function can't call itself. Loops do that job instead.</li>
+</ul>
+<p>The line <code>cold + (hot - cold) * t</code> is so useful that GLSL has a built-in for it, <code>mix(cold, hot, t)</code>. Chapter 4 explains why it works.</p>
+
+<h2 id="builtins"><span class="sec-n">2.9</span>Built-in functions</h2>
+<p>GLSL comes with about 50 built-in functions: math like <code>sin</code> and <code>sqrt</code>, shaping tools like <code>clamp</code> and <code>smoothstep</code>, geometry like <code>length</code> and <code>dot</code>. You'll meet each one when it's needed, with a picture of what it does. Two things are true of almost all of them:</p>
+<ul>
+<li>They work <b>slot by slot on vectors</b>: <code>abs(vec2(-1.0, 2.0))</code> is <code>vec2(1.0, 2.0)</code>.</li>
+<li>They expect <b>floats</b>, not ints: <code>sin(1)</code> is an error, <code>sin(1.0)</code> works.</li>
+</ul>
+<p>The <a href="../reference.html">reference</a> lists every built-in this course uses. In the workbench, click on a function name (or hover it) and its explanation appears above the code.</p>
+
+<h2 id="control"><span class="sec-n">2.10</span>Making decisions and repeating</h2>
+<p><b>if</b> runs code only when a condition is true. Conditions are comparisons like <code>x &gt; 0.5</code> or <code>column == 1.0</code> (two equals signs means “is equal to”), combined with <code>&amp;&amp;</code> (and), <code>||</code> (or) and <code>!</code> (not):</p>
+<pre class="snip"><code>if (x &gt; 0.5 &amp;&amp; y &lt; 0.2) {
+    col = vec3(1.0);
+} else {
+    col = vec3(0.0);
+}</code></pre>
+<p>For picking between two values there's a one-line form, the <b>ternary</b>: <code>condition ? valueIfTrue : valueIfFalse</code>, as in <code>vec3 col = x &gt; 0.5 ? vec3(1.0) : vec3(0.0);</code>.</p>
+<p><b>for</b> repeats code. It has three parts in its parentheses: start the counter, keep going while this is true, and how to step the counter:</p>
+<figure class="ex" id="ex-loop" data-ex="loop" data-label="Example 2.7" data-title="A loop builds a staircase of ten steps" data-cfg='{}'><figcaption><span class="ex-n">Example 2.7</span><span>A loop builds a staircase of ten steps</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    float y = fragCoord.y / iResolution.y;
+
+    float brightness = 0.0;
+    for (int i = 0; i &lt; 10; i++) {             // i = 0, 1, 2 … 9
+        if (y &gt; float(i) / 10.0) {             // am I above line i?
+            brightness += 0.1;                 // then one step brighter
+        }
+    }
+
+    fragColor = vec4(vec3(brightness), 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    float y = fragCoord.y / iResolution.y;
+
+    float brightness = 0.0;
+    for (int i = 0; i < 10; i++) {             // i = 0, 1, 2 … 9
+        if (y > float(i) / 10.0) {             // am I above line i?
+            brightness += 0.1;                 // then one step brighter
+        }
+    }
+
+    fragColor = vec4(vec3(brightness), 1.0);
+}
+</script></figure>
+<p>Each pixel runs its own copy of the loop. A pixel near the top is above all ten lines and adds up to 1.0. A pixel near the bottom is above only the first line and stays dark. The result: ten horizontal bands.</p>
+<aside class="box note"><span class="box-t">Loops and branches on a GPU</span><p>Because every pixel runs its own copy, a loop of 100 rounds costs 100 times as much on <em>every</em> pixel. Keep loops short and give them a fixed limit. Branches (<code>if</code>) are fine, but when neighbouring pixels take different branches, the GPU often runs both sides for the whole group. Chapter 17 explains why. Many shader writers prefer math tricks like <code>step()</code> over <code>if</code> for small choices, and you'll see why that's natural in Chapter 4.</p></aside>
+
+<section class="summary">
+<h2>What you now know</h2>
+<ul>
+<li>Statements end with <code>;</code>. Names are case-sensitive, and some words are reserved.</li>
+<li>Every variable has a type: <code>float</code>, <code>int</code>, <code>bool</code>, or a vector.</li>
+<li>Write <code>1.0</code>, not <code>1</code>, for floats. Convert explicitly with <code>float()</code> and <code>int()</code>.</li>
+<li>Vectors bundle 2, 3 or 4 floats. Build them with <code>vec3(…)</code>; read parts with <code>.x</code> or <code>.r</code>; reorder them with swizzles like <code>.bgr</code>.</li>
+<li>Math on vectors works slot by slot, and a float applies to every slot.</li>
+<li>Functions go above the code that uses them, and parameters are copies unless marked <code>out</code> or <code>inout</code>.</li>
+<li><code>if</code>, <code>? :</code> and <code>for</code> work much like JavaScript, but every pixel runs its own copy.</li>
+</ul>
+</section>
+
+<div class="try"><span class="box-t">Exercises: fix the bug</span>
+<p>Each snippet has one mistake. Paste it into the workbench (replacing the body of <code>mainImage</code>), read the error, and fix it.</p>
+<p><b>1.</b></p>
+<pre class="snip"><code>float x = fragCoord.x / iResolution.x;
+float steep = x * 2;
+fragColor = vec4(steep, 0.0, 0.0, 1.0);</code></pre>
+<details><summary>Answer</summary><div><p><code>x * 2</code> multiplies a float by an int. Write <code>x * 2.0</code>. (One exception to the rule: inside a constructor like <code>vec4(x, 0, 0, 1)</code>, GLSL does convert ints for you. Everywhere else it doesn't, so writing <code>.0</code> every time is the simplest habit.)</p></div></details>
+<p><b>2.</b></p>
+<pre class="snip"><code>vec2 uv = fragCoord / iResolution.xy;
+fragColor = vec4(uv, 1.0);</code></pre>
+<details><summary>Answer</summary><div><p>A vec2 plus one float makes three values, but vec4 needs four: <code>vec4(uv, 0.0, 1.0)</code>.</p></div></details>
+<p><b>3.</b></p>
+<pre class="snip"><code>vec2 uv = fragCoord / iResolution.xy;
+float smooth = uv.x * uv.y;
+fragColor = vec4(vec3(smooth), 1.0);</code></pre>
+<details><summary>Answer</summary><div><p><code>smooth</code> is a reserved word in GLSL. Rename it, for example to <code>v</code>.</p></div></details>
+<p><b>4.</b> Write a function <code>float brighten(float v)</code> that returns v times 1.5, and use it on the red channel of a ramp.</p>
+<details><summary>Solution</summary><div><pre class="snip"><code>float brighten(float v) {
+    return v * 1.5;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    float x = fragCoord.x / iResolution.x;
+    fragColor = vec4(brighten(x), 0.0, 0.0, 1.0);
+}</code></pre></div></details>
+</div>
+<p><b>Go deeper:</b> the <a href="../reference.html#g-types">types</a> and <a href="../reference.html#g-vectors">vectors</a> sections of the reference, and <a href="https://thebookofshaders.com/02/" target="_blank" rel="noopener">The Book of Shaders, chapter 2</a>.</p>
+
+<nav class="ch-nav" aria-label="Chapters"><a href="01-what-is-a-shader.html"><small>← Chapter 1</small><b>What is a shader?</b></a><a class="next" href="03-coordinates.html"><small>Chapter 3 →</small><b>Coordinates: where am I?</b></a></nav>
+</article>
+</div></div>
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="../assets/reference.js"></script><script src="../assets/engine.js"></script><script src="../assets/editor.js"></script><script src="../assets/widgets.js"></script><script src="../assets/site.js"></script>
+</body>
+</html>

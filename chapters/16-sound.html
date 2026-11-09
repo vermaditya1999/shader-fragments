@@ -1,0 +1,343 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>16. Music-reactive visuals · Shader Fragments</title>
+<meta name="description" content="What sound is, sampling, waveform and spectrum, the Fourier transform as a dot product, the audio texture, bass and treble, a visualizer and a spectrogram.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="../assets/icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+
+</head>
+<body data-page="chapter" data-root="..">
+<header class="top"><div class="top-in">
+  <a class="logo" href="../index.html"><span class="logo-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="word">Shader Fragments</span></a>
+  <nav class="nav" aria-label="Main"><a href="../index.html#contents">Contents</a><a href="../reference.html">Reference</a><a href="../playground.html">Playground</a></nav>
+</div></header>
+<main>
+<div class="wrap"><div class="chapter">
+<header class="ch-head">
+  <p class="eyebrow"><b>Part II · Make things</b> · Chapter 16</p>
+  <h1>Music-reactive visuals</h1>
+  <p class="lede">To make visuals dance, a shader needs to hear. It can't, directly: it can only read numbers. So this chapter starts from what sound physically is, follows it through a microphone and a famous algorithm into a small texture, and then wires that texture into everything you've built.</p>
+  <details class="ch-toc" open><summary>In this chapter</summary><ol><li><a href="#sound">What sound is</a></li><li><a href="#two-views">Two views of a sound: waveform and spectrum</a></li><li><a href="#audio-texture">Sound as a texture</a></li><li><a href="#bands">Bass, mids and treble</a></li><li><a href="#wiring">Wiring sound into a piece</a></li><li><a href="#radial">A circular visualizer</a></li><li><a href="#spectrogram">Sound with memory: a spectrogram</a></li></ol></details>
+</header>
+<aside class="stage" id="workbench" data-start="analyzer" aria-label="Workbench: live shader and code"></aside>
+<article class="ch-body">
+
+
+
+<h2 id="sound"><span class="sec-n">16.1</span>What sound is</h2>
+<p>Sound is air pressure wobbling. A speaker cone pushes forward, squeezing the air in front of it, then pulls back, thinning it, hundreds or thousands of times a second. That wobble travels to your ear, and your eardrum wobbles along.</p>
+<ul>
+<li><b>How fast</b> it wobbles is the <b>frequency</b>, counted in wobbles per second, called hertz (Hz). It's what you hear as pitch. Humans hear roughly 20 Hz (a deep rumble) to 20,000 Hz (a faint whine). The A above middle C is 440 Hz.</li>
+<li><b>How strongly</b> it wobbles is the <b>amplitude</b>, which you hear as loudness.</li>
+</ul>
+<p>A microphone turns the pressure into a voltage, and a computer measures that voltage at regular intervals, many thousands of times a second. Each measurement is a <b>sample</b>, a number between −1 and 1. CD audio takes 44,100 samples per second. So to a computer, a sound is just a very long list of numbers, which is good news for a shader.</p>
+<aside class="box math"><span class="box-t">Math from zero: why 44,100?</span>
+<p>To capture a wobble, you need at least two samples per cycle, one near the top and one near the bottom; with fewer, a fast wave looks like a slower one (the same effect that makes wagon wheels seem to spin backwards in films). So a sampling rate captures frequencies up to half of itself, called the <b>Nyquist frequency</b>. 44,100 samples per second captures up to 22,050 Hz, just above the limit of human hearing. That's the reason for that particular number.</p>
+</aside>
+
+<h2 id="two-views"><span class="sec-n">16.2</span>Two views of a sound: waveform and spectrum</h2>
+<p>A list of samples over time is called the <b>waveform</b>. It's what you see in an audio editor: the actual wobble. But for visuals, a different view is usually more useful. In the early 1800s Joseph Fourier showed that any repeating wave can be built by adding up sine waves of different frequencies, each with its own amplitude. The list of "how much of each frequency" is the <b>spectrum</b>. A bass drum is mostly low frequencies; a cymbal is mostly high ones:</p>
+<div data-widget="waves"></div>
+<p>The waveform is the sum, and it looks complicated. The spectrum is the recipe, and it's simple: three bars. Real sounds have recipes with thousands of ingredients, changing many times a second, but the idea is the same.</p>
+
+<h3>From waveform to spectrum: the Fourier transform</h3>
+<p>Given only the waveform, how do you find the recipe? Here's the key idea, and it's an old friend. To measure how much of, say, a 200 Hz sine wave is in a sound, multiply the sound sample by sample with a 200 Hz test wave, and add up all the products. If the sound contains that frequency, the two rise and fall together, the products are mostly positive, and the sum is large. Any other frequency drifts in and out of step with the test wave, so its products are positive half the time and negative the other half, and they cancel out to almost nothing.</p>
+<p>Multiply matching entries and add them up: that's a <b>dot product</b> (Chapter 7). And just as in Chapter 7, it measures how much two things "point the same way", here a sound and a test wave. Doing this for every frequency is the <b>Fourier transform</b>. (In practice each frequency is tested with both a sine and a cosine and the results combined, so it doesn't matter where in its cycle the sound's wave started.) The <b>FFT</b>, the Fast Fourier Transform, is a clever algorithm, published by Cooley and Tukey in 1965, that computes every frequency at once by reusing shared work. It's one of the most important algorithms ever written: it's in every phone, music app and video codec.</p>
+<aside class="box aha"><span class="box-t">// AHA</span><p>A spectrum is a dot product between the sound and every possible sine wave. The same operation that lit a sphere in Chapter 7 tells you how much bass is in a song.</p></aside>
+
+<h2 id="audio-texture"><span class="sec-n">16.3</span>Sound as a texture</h2>
+<p>The browser runs an FFT for you, through the Web Audio API's analyser. Every frame it takes the most recent 1,024 samples (about 23 milliseconds of sound) and turns them into <b>512 frequency bins</b>. Each bin covers a slice of about 43 Hz: bin 0 is 0–43 Hz, bin 1 is 43–86 Hz, and so on up to about 22,000 Hz. Two adjustments make the numbers friendlier:</p>
+<ul>
+<li>Loudness is reported in <b>decibels</b>, a logarithmic scale, because our ears work that way: ten times the sound power sounds only about twice as loud. The analyser maps −100 dB (very quiet) to 0 and −30 dB (very loud) to 1.</li>
+<li>Each frame is blended with the previous ones, so the values don't flicker.</li>
+</ul>
+<p>Then, following Shadertoy's convention, the numbers are packed into a texture 512 texels wide and 2 tall. Row 0 is the spectrum and row 1 is the waveform, so you read them at y = 0.25 and y = 0.75 (the centers of the two rows, Chapter 15):</p>
+<pre class="snip"><code>float level = texture(iChannel0, vec2(x, 0.25)).r;   // loudness of frequency x: 0..1 (x = 0 is the bass end)
+float wave  = texture(iChannel0, vec2(x, 0.75)).r;   // the waveform at position x: 0.5 means silence</code></pre>
+<p>In this chapter's workbench, buttons under the canvas let you <b>play a built-in beat</b>, <b>load a track</b> from your computer, or <b>use your microphone</b>. The file stays in your browser and the microphone is never played back or recorded. While nothing is playing, a stand-in signal with a steady pulse keeps the previews moving. Here's the raw data: the spectrum as orange bars, the waveform as a blue line:</p>
+<figure class="ex" id="ex-analyzer" data-ex="analyzer" data-label="Example 16.1" data-title="The audio texture: spectrum (bars) and waveform (line)" data-cfg='{"audio": true}'><figcaption><span class="ex-n">Example 16.1</span><span>The audio texture: spectrum (bars) and waveform (line)</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+
+    float level = texture(iChannel0, vec2(uv.x, 0.25)).r;   // how loud is this frequency?
+    float wave  = texture(iChannel0, vec2(uv.x, 0.75)).r;   // the raw waveform (0.5 = silence)
+
+    vec3 col = vec3(0.05, 0.05, 0.08);
+    col += vec3(1.0, 0.5, 0.2) * step(uv.y, level);                                  // bars
+    col += vec3(0.4, 0.8, 1.0) * (1.0 - smoothstep(0.0, 0.01, abs(uv.y - wave)));   // line
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+
+    float level = texture(iChannel0, vec2(uv.x, 0.25)).r;   // how loud is this frequency?
+    float wave  = texture(iChannel0, vec2(uv.x, 0.75)).r;   // the raw waveform (0.5 = silence)
+
+    vec3 col = vec3(0.05, 0.05, 0.08);
+    col += vec3(1.0, 0.5, 0.2) * step(uv.y, level);                                  // bars
+    col += vec3(0.4, 0.8, 1.0) * (1.0 - smoothstep(0.0, 0.01, abs(uv.y - wave)));   // line
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<p>Play some music and notice where the action is: almost everything happens in the left third. Music's energy is concentrated in the low and middle frequencies, and pitch works on a doubling scale (each octave up doubles the frequency), so all the bass notes of a piano squeeze into the first few bins while the top octave alone spans hundreds. To give the low end more room, visualizers often stretch it, for example reading at <code>x * x</code> instead of <code>x</code>.</p>
+
+<h2 id="bands"><span class="sec-n">16.4</span>Bass, mids and treble</h2>
+<p>For visuals you rarely want 512 separate numbers. You want a few that mean something musical: how much bass (the kick drum and bass line), how much midrange (voices, most instruments), how much treble (cymbals, hi-hats, the "s" sounds). Average a range of bins for each:</p>
+<figure class="ex long" id="ex-bands" data-ex="bands" data-label="Example 16.2" data-title="Three bands, each driving one disc" data-cfg='{"audio": true}'><figcaption><span class="ex-n">Example 16.2</span><span>Three bands, each driving one disc</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>// Average loudness of the spectrum between x0 and x1 (0..1 across the texture).
+float band(float x0, float x1) {
+    float sum = 0.0;
+    for (int i = 0; i &lt; 16; i++) {
+        float x = mix(x0, x1, (float(i) + 0.5) / 16.0);
+        sum += texture(iChannel0, vec2(x, 0.25)).r;
+    }
+    return sum / 16.0;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    float bass   = band(0.0, 0.02);    // bins 0..10:   about 0 to 450 Hz
+    float mids   = band(0.02, 0.15);   // bins 10..77:  about 450 Hz to 3.3 kHz
+    float treble = band(0.15, 0.6);    // bins 77..307: about 3.3 to 13 kHz
+
+    bass = pow(bass, 3.0);             // shaping: quiet parts squashed, peaks kept (Chapter 4)
+
+    vec3 col = vec3(0.05, 0.05, 0.08) + vec3(0.25, 0.08, 0.02) * bass;   // a flash on each kick
+    float d1 = length(uv - vec2(-1.0, 0.0)) - (0.15 + 0.45 * bass);
+    float d2 = length(uv - vec2( 0.0, 0.0)) - (0.15 + 0.45 * mids);
+    float d3 = length(uv - vec2( 1.0, 0.0)) - (0.15 + 0.45 * treble);
+    col = mix(col, vec3(1.0, 0.55, 0.2), 1.0 - smoothstep(-px, px, d1));
+    col = mix(col, vec3(0.95, 0.35, 0.6), 1.0 - smoothstep(-px, px, d2));
+    col = mix(col, vec3(0.4, 0.8, 1.0), 1.0 - smoothstep(-px, px, d3));
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn ex-more" type="button" data-label="Show all 29 lines">Show all 29 lines</button><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+// Average loudness of the spectrum between x0 and x1 (0..1 across the texture).
+float band(float x0, float x1) {
+    float sum = 0.0;
+    for (int i = 0; i < 16; i++) {
+        float x = mix(x0, x1, (float(i) + 0.5) / 16.0);
+        sum += texture(iChannel0, vec2(x, 0.25)).r;
+    }
+    return sum / 16.0;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    float bass   = band(0.0, 0.02);    // bins 0..10:   about 0 to 450 Hz
+    float mids   = band(0.02, 0.15);   // bins 10..77:  about 450 Hz to 3.3 kHz
+    float treble = band(0.15, 0.6);    // bins 77..307: about 3.3 to 13 kHz
+
+    bass = pow(bass, 3.0);             // shaping: quiet parts squashed, peaks kept (Chapter 4)
+
+    vec3 col = vec3(0.05, 0.05, 0.08) + vec3(0.25, 0.08, 0.02) * bass;   // a flash on each kick
+    float d1 = length(uv - vec2(-1.0, 0.0)) - (0.15 + 0.45 * bass);
+    float d2 = length(uv - vec2( 0.0, 0.0)) - (0.15 + 0.45 * mids);
+    float d3 = length(uv - vec2( 1.0, 0.0)) - (0.15 + 0.45 * treble);
+    col = mix(col, vec3(1.0, 0.55, 0.2), 1.0 - smoothstep(-px, px, d1));
+    col = mix(col, vec3(0.95, 0.35, 0.6), 1.0 - smoothstep(-px, px, d2));
+    col = mix(col, vec3(0.4, 0.8, 1.0), 1.0 - smoothstep(-px, px, d3));
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<p>Notice the <code>pow(bass, 3.0)</code>. Raw loudness values are mushy: there's always some bass, so the disc barely changes size. Cubing pushes the in-between values toward zero while 1 stays 1, so the disc snaps on the beat and rests in between. Shaping the signal with Chapter 4's functions is most of the art of audio-reactive visuals. Try <code>smoothstep(0.4, 0.8, bass)</code> for a harder, more switch-like response.</p>
+
+<h2 id="wiring"><span class="sec-n">16.5</span>Wiring sound into a piece</h2>
+<p>Any number in a shader can listen. Here's Chapter 12's piece with bass wired into two places, the tiling scale and the glow strength, and nothing else changed:</p>
+<figure class="ex long" id="ex-bass-piece" data-ex="bass-piece" data-label="Example 16.3" data-title="Chapter 12&#x27;s piece, with the bass driving two numbers" data-cfg='{"audio": true}'><figcaption><span class="ex-n">Example 16.3</span><span>Chapter 12's piece, with the bass driving two numbers</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>vec3 palette(float t) {
+    vec3 a = vec3(0.5, 0.5, 0.5);
+    vec3 b = vec3(0.5, 0.5, 0.5);
+    vec3 c = vec3(1.0, 1.0, 1.0);
+    vec3 d = vec3(0.263, 0.416, 0.557);
+    return a + b * cos(6.28318 * (c * t + d));
+}
+
+float getBass() {                                     // the 8 lowest bins, averaged: 0..1
+    float sum = 0.0;
+    for (int i = 0; i &lt; 8; i++) {
+        sum += texture(iChannel0, vec2((float(i) + 0.5) / 512.0, 0.25)).r;
+    }
+    return sum / 8.0;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    float bass = pow(getBass(), 3.0);
+
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    vec2 uv0 = uv;
+    vec3 finalColor = vec3(0.0);
+
+    for (float i = 0.0; i &lt; 4.0; i++) {
+        uv = fract(uv * (1.5 + 0.15 * bass)) - 0.5;          // the bass pushes the tiling...
+        float d = length(uv) * exp(-length(uv0));
+        vec3 col = palette(length(uv0) + i * 0.4 + iTime * 0.4);
+        d = sin(d * 8.0 + iTime) / 8.0;
+        d = abs(d);
+        d = pow((0.01 + 0.012 * bass) / d, 1.2);              // ...and the glow
+        finalColor += col * d;
+    }
+    fragColor = vec4(finalColor, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn ex-more" type="button" data-label="Show all 34 lines">Show all 34 lines</button><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+vec3 palette(float t) {
+    vec3 a = vec3(0.5, 0.5, 0.5);
+    vec3 b = vec3(0.5, 0.5, 0.5);
+    vec3 c = vec3(1.0, 1.0, 1.0);
+    vec3 d = vec3(0.263, 0.416, 0.557);
+    return a + b * cos(6.28318 * (c * t + d));
+}
+
+float getBass() {                                     // the 8 lowest bins, averaged: 0..1
+    float sum = 0.0;
+    for (int i = 0; i < 8; i++) {
+        sum += texture(iChannel0, vec2((float(i) + 0.5) / 512.0, 0.25)).r;
+    }
+    return sum / 8.0;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    float bass = pow(getBass(), 3.0);
+
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    vec2 uv0 = uv;
+    vec3 finalColor = vec3(0.0);
+
+    for (float i = 0.0; i < 4.0; i++) {
+        uv = fract(uv * (1.5 + 0.15 * bass)) - 0.5;          // the bass pushes the tiling...
+        float d = length(uv) * exp(-length(uv0));
+        vec3 col = palette(length(uv0) + i * 0.4 + iTime * 0.4);
+        d = sin(d * 8.0 + iTime) / 8.0;
+        d = abs(d);
+        d = pow((0.01 + 0.012 * bass) / d, 1.2);              // ...and the glow
+        finalColor += col * d;
+    }
+    fragColor = vec4(finalColor, 1.0);
+}
+</script></figure>
+<p><code>(float(i) + 0.5) / 512.0</code> is the center of texel i, the same "+ 0.5 for the center" as fragCoord's pixel centers in Chapter 3. Reading exactly at texel centers gives exact bin values instead of blends of neighbors.</p>
+
+<h2 id="radial"><span class="sec-n">16.6</span>A circular visualizer</h2>
+<p>The classic music visualizer bends the spectrum into a circle: the angle chooses the frequency (Chapter 10's polar coordinates), and the loudness pushes the edge outward. Using <code>abs(angle)</code> mirrors it, so the shape is symmetric, with the bass on the right and the treble on the left. A smaller inner ring traces the waveform:</p>
+<figure class="ex" id="ex-radial" data-ex="radial" data-label="Example 16.4" data-title="A circular visualizer: angle picks the frequency" data-cfg='{"audio": true}'><figcaption><span class="ex-n">Example 16.4</span><span>A circular visualizer: angle picks the frequency</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>vec3 palette(float t) {
+    return 0.5 + 0.5 * cos(6.28318 * (t + vec3(0.0, 0.33, 0.67)));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float a = atan(uv.y, uv.x);
+    float r = length(uv);
+
+    float x = abs(a) / 3.14159;                                      // 0 on the right, 1 on the left
+    float level = texture(iChannel0, vec2(x * x * 0.6, 0.25)).r;     // x * x gives the bass more room
+    float bass = pow(texture(iChannel0, vec2(0.01, 0.25)).r, 3.0);
+
+    float base = 0.42 + 0.1 * bass;                                  // the ring breathes with the bass
+    float edge = base + 0.45 * level * level;                        // each direction reaches out
+    vec3 col = palette(x * 0.8 + iTime * 0.05) * 0.008 / abs(r - edge);   // neon (Chapter 8)
+
+    float wave = texture(iChannel0, vec2(x, 0.75)).r - 0.5;          // the waveform as an inner ring
+    col += vec3(0.7, 0.85, 1.0) * 0.003 / abs(r - (base * 0.55 + wave * 0.3));
+
+    col += palette(iTime * 0.05) * bass * 0.25 * (1.0 - smoothstep(0.0, base, r));   // inner glow
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+vec3 palette(float t) {
+    return 0.5 + 0.5 * cos(6.28318 * (t + vec3(0.0, 0.33, 0.67)));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float a = atan(uv.y, uv.x);
+    float r = length(uv);
+
+    float x = abs(a) / 3.14159;                                      // 0 on the right, 1 on the left
+    float level = texture(iChannel0, vec2(x * x * 0.6, 0.25)).r;     // x * x gives the bass more room
+    float bass = pow(texture(iChannel0, vec2(0.01, 0.25)).r, 3.0);
+
+    float base = 0.42 + 0.1 * bass;                                  // the ring breathes with the bass
+    float edge = base + 0.45 * level * level;                        // each direction reaches out
+    vec3 col = palette(x * 0.8 + iTime * 0.05) * 0.008 / abs(r - edge);   // neon (Chapter 8)
+
+    float wave = texture(iChannel0, vec2(x, 0.75)).r - 0.5;          // the waveform as an inner ring
+    col += vec3(0.7, 0.85, 1.0) * 0.003 / abs(r - (base * 0.55 + wave * 0.3));
+
+    col += palette(iTime * 0.05) * bass * 0.25 * (1.0 - smoothstep(0.0, base, r));   // inner glow
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+
+<h2 id="spectrogram"><span class="sec-n">16.7</span>Sound with memory: a spectrogram</h2>
+<p>The audio texture is only "now": the last 23 milliseconds. Combine it with Chapter 15's buffers and you can keep a history. A <b>spectrogram</b> stacks the spectrum over time: each frame, shift the old picture one pixel to the left and paint the newest spectrum into the rightmost column. Time runs left to right, frequency bottom to top, loudness as brightness.</p>
+<p>One wiring detail: in a Buffer pass, <code>iChannel0</code> is already taken by the buffer's own last frame, so the sound arrives on <code>iChannel1</code>. (On Shadertoy you'd set that up yourself; Chapter 20 shows how.)</p>
+<figure class="ex" id="ex-spectrogram" data-ex="spectrogram" data-label="Example 16.5" data-title="A scrolling spectrogram: time across, frequency up" data-cfg='{"audio": true, "bufferScale": 0.5, "substeps": 1, "filter": "linear"}'><figcaption><span class="ex-n">Example 16.5</span><span>A scrolling spectrogram: time across, frequency up</span></figcaption><div class="ex-view"></div><p class="ex-pass">Buffer A</p><pre class="ex-code"><code>// Buffer A: scroll left by one texel, and write this frame's spectrum into the right edge.
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    if (fragCoord.x &lt; iResolution.x - 1.0) {
+        fragColor = texelFetch(iChannel0, ivec2(fragCoord) + ivec2(1, 0), 0);   // copy my right neighbor
+        return;
+    }
+    float y = fragCoord.y / iResolution.y;                         // 0 at the bottom, 1 at the top
+    float level = texture(iChannel1, vec2(y * y * 0.7, 0.25)).r;   // iChannel1 is the sound here
+    fragColor = vec4(level, 0.0, 0.0, 1.0);
+}</code></pre><p class="ex-pass">Image</p><pre class="ex-code"><code>// Image: color the history with a fire-like palette.
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    float v = texture(iChannel0, fragCoord / iResolution.xy).r;
+    vec3 col = vec3(pow(v, 0.8), pow(v, 2.0), pow(v, 5.0));       // dark red → orange → white
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="buffer">
+// Buffer A: scroll left by one texel, and write this frame's spectrum into the right edge.
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    if (fragCoord.x < iResolution.x - 1.0) {
+        fragColor = texelFetch(iChannel0, ivec2(fragCoord) + ivec2(1, 0), 0);   // copy my right neighbor
+        return;
+    }
+    float y = fragCoord.y / iResolution.y;                         // 0 at the bottom, 1 at the top
+    float level = texture(iChannel1, vec2(y * y * 0.7, 0.25)).r;   // iChannel1 is the sound here
+    fragColor = vec4(level, 0.0, 0.0, 1.0);
+}
+</script><script type="text/x-glsl" data-pass="image">
+// Image: color the history with a fire-like palette.
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    float v = texture(iChannel0, fragCoord / iResolution.xy).r;
+    vec3 col = vec3(pow(v, 0.8), pow(v, 2.0), pow(v, 5.0));       // dark red → orange → white
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<p>Play the beat and you can read the music: the kick drum makes regular bright blobs at the bottom, the hi-hats make thin streaks near the top, and the bass line and chords make horizontal bands at their pitches. Speech in the microphone shows the stacked lines (harmonics) of your voice moving up and down as you talk. Spectrograms are how audio engineers, birdsong researchers and speech scientists look at sound.</p>
+
+<section class="summary">
+<h2>What you now know</h2>
+<ul>
+<li>Sound is a pressure wobble. Frequency is pitch (Hz); amplitude is loudness. Computers sample it, typically 44,100 times a second.</li>
+<li>Any sound is a sum of sine waves. The waveform is the sum; the spectrum is the recipe.</li>
+<li>The Fourier transform is a dot product with test waves at every frequency; the FFT computes it fast.</li>
+<li>The audio texture is 512 × 2: spectrum at y = 0.25 (0 = bass end, values in decibels mapped to 0..1), waveform at y = 0.75 (0.5 = silence).</li>
+<li>Average bins into bands, then shape them (<code>pow</code>, <code>smoothstep</code>) so motion snaps to the beat.</li>
+<li>A buffer gives sound a memory. In a buffer pass the sound is on iChannel1.</li>
+</ul>
+</section>
+
+<div class="try"><span class="box-t">Exercises</span>
+<p><b>1.</b> In <code>bass-piece</code>, add a treble band and use it to shift the palette, so cymbals change the colors.</p>
+<details><summary>Hint</summary><div><pre class="snip"><code>float treble = 0.0;
+for (int k = 0; k &lt; 8; k++) treble += texture(iChannel0, vec2(0.4 + float(k) * 0.025, 0.25)).r;
+treble /= 8.0;
+// then: palette(length(uv0) + i * 0.4 + iTime * 0.4 + treble)</code></pre></div></details>
+<p><b>2.</b> Wire the bass into one of your earlier pieces: the tunnel's speed (Chapter 10), the soft shadow's k (Chapter 14), or the size of the Game of Life's scribble brush (Chapter 15).</p>
+<p><b>3.</b> Load a song you love and tune <code>radial</code> to it: its colors, how much it reacts, how fast it turns.</p>
+<p><b>4.</b> Make the spectrogram scroll upward instead, with frequency running left to right.</p>
+</div>
+<p><b>Go deeper:</b> <a href="https://www.youtube.com/watch?v=spUNpyF58BY" target="_blank" rel="noopener">3Blue1Brown, But what is the Fourier Transform?</a>, a visual explanation of exactly the idea in this chapter, and <a href="https://developer.mozilla.org/en-US/docs/Web/API/AnalyserNode" target="_blank" rel="noopener">MDN on the AnalyserNode</a>, the browser feature behind the audio texture.</p>
+
+<nav class="ch-nav" aria-label="Chapters"><a href="15-simulations.html"><small>← Chapter 15</small><b>Living simulations: memory and feedback</b></a><a class="next" href="17-how-the-gpu-works.html"><small>Chapter 17 →</small><b>How the GPU runs your shader</b></a></nav>
+</article>
+</div></div>
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="../assets/reference.js"></script><script src="../assets/engine.js"></script><script src="../assets/editor.js"></script><script src="../assets/widgets.js"></script><script src="../assets/site.js"></script>
+</body>
+</html>

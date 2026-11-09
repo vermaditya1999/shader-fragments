@@ -1,0 +1,266 @@
+<!--meta
+{"num": 7, "slug": "vectors", "part": 1, "title": "Vectors: arrows, distances and directions", "summary": "Points and arrows, adding and subtracting, Pythagoras and length, normalize, the dot product, and a lit ball from one line of math.", "hero": "ball", "start": "offset"}
+-->
+<p class="lede">You've used <code>vec2</code> as "two numbers in a box" since Chapter 2. This chapter gives those two numbers a picture: an arrow. Once you see vectors as arrows, distance, direction and lighting all turn out to be a few lines of arithmetic, and by the end you'll shade a 3D-looking ball with a single dot product.</p>
+
+<h2 id="two-views">A point or an arrow</h2>
+<p>The same two numbers can mean two different things, and shader code switches between them constantly:</p>
+<ul>
+<li>A <b>position</b>: "the place at x = 2, y = 1". This is what <code>uv</code> is: where the current pixel is.</li>
+<li>A <b>step</b> or <b>arrow</b>: "go 2 to the right and 1 up", from wherever you are. An arrow has a <b>direction</b> (which way it points) and a <b>length</b> (how far it goes), but no fixed starting place.</li>
+</ul>
+<p>The word <b>vector</b> covers both. A position is really an arrow from the origin to that place, so you can always switch views. In the diagrams below, vectors are drawn as arrows from the origin, and you can drag their tips.</p>
+
+<h2 id="add-sub">Adding and subtracting</h2>
+<p>Adding two vectors adds their parts: x to x, y to y. As arrows, it means <em>walk the first arrow, then the second</em>, and the sum is the arrow from where you started to where you ended up. Drag the tips of a and b:</p>
+<div data-widget="vectors" data-mode="add"></div>
+<p>Now switch the widget to <b>b − a</b>. Subtracting gives the arrow <em>from a's tip to b's tip</em>. Read it as "where do I have to go, starting at a, to get to b?" Check it: start at a and add b − a, and you get a + b − a = b.</p>
+<p>This is the most useful idea in the chapter. In shaders it shows up as <code>uv - center</code>: the arrow from some center point to the current pixel. It measures every pixel's position <em>as seen from the center</em>, as if the center were the origin. Here the center wanders around, and a grid drawn in the measured-from-center coordinates comes along with it:</p>
+<script type="text/x-glsl" data-ex="offset" data-title="uv − c: every pixel measured from a moving point">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+
+    vec2 c = vec2(0.7 * cos(iTime * 0.7), 0.4 * sin(iTime));   // a point that wanders
+    vec2 q = uv - c;                                           // arrow from c to this pixel
+
+    vec3 col = vec3(0.08, 0.09, 0.12);
+    // grid lines every 0.25 units of q, so the grid is centered on c
+    vec2 cell = abs(fract(q * 4.0 + 0.5) - 0.5);               // 0 on a grid line
+    col += 0.18 * step(min(cell.x, cell.y), 0.03);
+    // q's own axes: where q.x = 0 and where q.y = 0
+    col = mix(col, vec3(1.0, 0.6, 0.2), step(abs(q.x), 0.006));
+    col = mix(col, vec3(0.4, 0.7, 1.0), step(abs(q.y), 0.006));
+
+    fragColor = vec4(col, 1.0);
+}
+</script>
+<p>Nothing here moves the grid directly. Each pixel just measures itself from <code>c</code>, and the grid appears wherever those measurements land on a multiple of 0.25. Chapter 9 builds all of moving, rotating and scaling on this idea.</p>
+
+<h2 id="scale">Scaling</h2>
+<p>Multiplying a vector by a single number (a <b>scalar</b>) multiplies both parts. As an arrow, it keeps the direction and stretches the length: <code>v * 2.0</code> is twice as long, <code>v * 0.5</code> half, and <code>v * -1.0</code> (or just <code>-v</code>) the same length pointing the opposite way. Zooming with <code>uv * 3.0</code> in Chapter 3 was exactly this, applied to every pixel's position at once.</p>
+
+<h2 id="length">Length: Pythagoras from zero</h2>
+<p>How long is the arrow (3, 2)? It goes 3 across and 2 up, and those two parts make the sides of a right-angled triangle, with the arrow itself as the long side. The length of that long side comes from the most useful theorem in graphics.</p>
+<figure class="diagram">
+<svg viewBox="0 0 540 240" role="img" aria-label="Left: the arrow (3, 2) with its x part and y part forming a right triangle. Right: a square of side x plus y containing four copies of the triangle around a tilted square of side c.">
+  <g transform="translate(20,20)">
+    <g stroke="currentColor" stroke-opacity=".18"><path d="M0 0h240M0 40h240M0 80h240M0 120h240M0 160h240M0 200h240M0 0v200M40 0v200M80 0v200M120 0v200M160 0v200M200 0v200M240 0v200"/></g>
+    <path d="M40 160 h120" stroke="#f2a33a" stroke-width="4"/>
+    <path d="M160 160 v-80" stroke="#4fb3c8" stroke-width="4"/>
+    <path d="M40 160 L154 84" stroke="currentColor" stroke-width="3"/><path d="M160 80 l-13 1 l6 9z" fill="currentColor"/>
+    <path d="M148 160 v-12 h12" fill="none" stroke="currentColor" stroke-opacity=".6"/>
+    <g font-family="ui-monospace, monospace" font-size="14" fill="currentColor">
+      <text x="88" y="182" fill="#d98a1e">x = 3</text><text x="168" y="125" fill="#3b9db3">y = 2</text>
+      <text x="62" y="108">length = ?</text><text x="24" y="178">0</text>
+    </g>
+  </g>
+  <g transform="translate(320,20)">
+    <rect x="0" y="0" width="190" height="190" fill="none" stroke="currentColor" stroke-width="2"/>
+    <path d="M120 190 L190 70 L70 0 L0 120 Z" fill="#f2a33a" fill-opacity=".28" stroke="currentColor" stroke-width="2"/>
+    <g fill="#4fb3c8" fill-opacity=".22"><path d="M0 190 L120 190 L0 120 Z"/><path d="M190 190 L190 70 L120 190 Z"/><path d="M190 0 L70 0 L190 70 Z"/><path d="M0 0 L0 120 L70 0 Z"/></g>
+    <g font-family="ui-monospace, monospace" font-size="14" fill="currentColor">
+      <text x="56" y="208">x</text><text x="150" y="208">y</text><text x="-14" y="160">y</text><text x="-14" y="64">x</text>
+      <text x="88" y="100" font-size="18">c²</text><text x="48" y="168">c</text>
+    </g>
+  </g>
+</svg>
+<figcaption>Left: an arrow and its two parts form a right triangle. Right: four copies of that triangle arranged inside a square of side x + y leave a tilted square of side c in the middle.</figcaption>
+</figure>
+<aside class="math" title="Math from zero: Pythagoras' theorem">
+<p>For a right-angled triangle with short sides x and y and long side c: <b>c² = x² + y²</b>. Here's why, using the right-hand picture.</p>
+<p>The big square has side x + y, so its area is (x + y)². The same square is also made of four triangles plus the tilted square in the middle. Each triangle is half of an x-by-y rectangle, so its area is ½xy, and the tilted square's area is c². So:</p>
+<div class="formula">(x + y)²          = 4 × ½xy + c²
+x² + 2xy + y²     = 2xy + c²
+x² + y²           = c²</div>
+<p>To get c itself, undo the squaring with a <b>square root</b>: √n is the number that, multiplied by itself, gives n. So √9 = 3, and √2 ≈ 1.414. In GLSL it's <code>sqrt(n)</code>.</p>
+</aside>
+<p>So the length of the vector (x, y) is √(x² + y²). For (3, 2), that's √13 ≈ 3.61. GLSL has it built in as <code>length(v)</code>, and it works the same in 3D: the length of (x, y, z) is √(x² + y² + z²).</p>
+<p>The <b>distance</b> between two points is the length of the arrow between them: <code>length(b - a)</code>, also built in as <code>distance(a, b)</code>. That's the circle from Chapter 3, now fully explained: <code>length(uv) &lt; 0.5</code> asks "is this pixel within 0.5 of the origin?"</p>
+<p>Here's a picture made of nothing but distances. Two points wander; each pixel asks which one is closer and colors itself accordingly, with faint rings marking equal distances:</p>
+<script type="text/x-glsl" data-ex="closer" data-title="Which point is closer? Two distances, compared">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+
+    vec2 a = vec2(-0.6, 0.0) + 0.3 * vec2(cos(iTime), sin(iTime * 1.3));
+    vec2 b = vec2( 0.6, 0.1) + 0.3 * vec2(sin(iTime * 0.8), cos(iTime));
+
+    float da = distance(uv, a);              // the same as length(uv - a)
+    float db = distance(uv, b);
+    float d  = min(da, db);                  // distance to whichever is nearer
+
+    vec3 col = da < db ? vec3(0.25, 0.45, 0.9) : vec3(1.0, 0.55, 0.2);
+    col *= 0.8 + 0.2 * cos(d * 60.0);        // rings of equal distance
+    col = mix(col, vec3(1.0), step(d, 0.03)); // the two points themselves
+
+    fragColor = vec4(col, 1.0);
+}
+</script>
+<details class="predict"><summary>What shape is the border between the blue and orange regions, and why?</summary>
+<div><p>A straight line, always exactly halfway between the two points and at right angles to the line joining them. Every point on it is the same distance from a and from b. With many points instead of two, these borders form a cell pattern called a Voronoi diagram, which you'll build in Chapter 11.</p></div></details>
+
+<h2 id="metrics">What "distance" means is a choice</h2>
+<p>A circle is "all the points at the same distance from the center". Pythagoras is the straight-line distance, but it's not the only way to measure. A taxi in a city of square blocks can only drive along the grid, so its distance is |x| + |y|. Or you could measure by whichever part is bigger: max(|x|, |y|). Change the measure, and the "circles" change shape:</p>
+<script type="text/x-glsl" data-ex="metrics" data-title="Three ways to measure distance, three kinds of circle">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    // split the canvas into three panels, each with its own centered coordinates
+    float panelW = iResolution.x / 3.0;
+    float panel = floor(fragCoord.x / panelW);                 // 0, 1 or 2
+    vec2 local = vec2(fragCoord.x - panel * panelW, fragCoord.y);
+    vec2 p = (local * 2.0 - vec2(panelW, iResolution.y)) / iResolution.y;
+
+    float d;
+    if (panel == 0.0)      d = length(p);                      // straight line (Pythagoras)
+    else if (panel == 1.0) d = abs(p.x) + abs(p.y);            // taxicab: along the grid
+    else                   d = max(abs(p.x), abs(p.y));        // the bigger part
+
+    vec3 col = mix(vec3(0.1, 0.11, 0.15), vec3(1.0, 0.6, 0.2), step(d, 0.6));
+    col *= 0.8 + 0.2 * cos(d * 40.0 - iTime * 3.0);            // rings of equal distance
+    if (local.x < 1.5) col = vec3(0.35);                       // panel borders
+
+    fragColor = vec4(col, 1.0);
+}
+</script>
+<p>Left: the straight-line distance gives circles. Middle: the taxicab distance gives diamonds. Right: the bigger-part distance gives squares. Every shape in Chapter 8 starts from a question like this: <em>how far is this pixel from the shape?</em></p>
+<aside class="aha"><p>A shape is just "everything closer than some distance". Change the formula for distance, and the shape changes with it.</p></aside>
+
+<h2 id="normalize">Direction without length: normalize</h2>
+<p>Sometimes you only care which way an arrow points, not how long it is. Divide a vector by its own length and you get an arrow in the same direction with length exactly 1, called a <b>unit vector</b>. This is <code>normalize(v)</code>, the same as <code>v / length(v)</code>.</p>
+<p>Coloring every pixel by the direction from the center (not the distance) gives a picture where everything along the same line from the center gets the same color:</p>
+<script type="text/x-glsl" data-ex="directions" data-title="normalize: only the direction survives">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+
+    vec2 dir = normalize(uv);                  // length 1, pointing from the center to the pixel
+    vec3 col = vec3(dir * 0.5 + 0.5, 0.6);     // its x and y (-1..1) shown as red and green
+
+    // for comparison, the bottom strip shows uv itself, length included
+    if (uv.y < -0.75) col = vec3(uv * 0.5 + 0.5, 0.6);
+
+    fragColor = vec4(col, 1.0);
+}
+</script>
+<aside class="warn" title="Watch out: normalize(0)"><p>The zero vector (0, 0) has no direction, and normalizing it divides by zero. The result is undefined, usually NaN ("not a number"), which can show up as black or garbage pixels. If a vector could be zero, guard it or add a tiny amount first. Chapter 19 shows how to hunt NaNs down.</p></aside>
+
+<h2 id="dot">The dot product</h2>
+<p>The <b>dot product</b> of two vectors multiplies their matching parts and adds the results:</p>
+<div class="formula">dot(a, b) = a.x * b.x + a.y * b.y            (in 3D, add a.z * b.z too)</div>
+<p>It looks like arbitrary bookkeeping, but it answers a very geometric question: <em>how much do these two arrows point the same way?</em></p>
+<div data-widget="vectors" data-mode="dot"></div>
+<p>Play with it and you'll see the pattern:</p>
+<ul>
+<li>Pointing the same way: large and positive.</li>
+<li>At right angles (perpendicular): exactly 0.</li>
+<li>Pointing opposite ways: negative.</li>
+</ul>
+<aside class="math" title="Math from zero: why the dot product measures angle">
+<p>Turn the whole picture so that <b>a</b> points along the x axis. Turning doesn't change the arrows' lengths or the angle θ between them, and (as you'll see in Chapter 9) it doesn't change the dot product either. Now a = (|a|, 0), where |a| means a's length, and by Chapter 5's unit circle, b = |b| × (cos θ, sin θ). So:</p>
+<div class="formula">dot(a, b) = |a| × |b| cos θ + 0 × |b| sin θ = |a| × |b| × cos θ</div>
+<p>For two <b>unit</b> vectors, the lengths are 1, and the dot product is simply cos θ: 1 when they agree, 0 at a right angle, −1 when opposite. And if only b is a unit vector, dot(a, b) = |a| cos θ, which is how far a reaches along b's direction, like the length of a's shadow on b's line. That's the pink bar in the widget, called the <b>projection</b> of a onto b.</p>
+<p>One more gift: <code>dot(v, v)</code> = x² + y², the length squared, with no square root. Shaders use it when they only need to compare distances.</p>
+</aside>
+
+<h3>Gradients at any angle</h3>
+<p>Projection has a beautiful use. If <code>dir</code> is a unit vector, then <code>dot(uv, dir)</code> is how far along <code>dir</code> each pixel is. That's a ramp in any direction you like. In fact <code>uv.x</code> was always just <code>dot(uv, vec2(1.0, 0.0))</code>:</p>
+<script type="text/x-glsl" data-ex="dot-ramp" data-title="dot(uv, dir): a gradient pointing any way you like">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+
+    float angle = iTime * 0.4;
+    vec2 dir = vec2(cos(angle), sin(angle));          // a unit arrow, slowly turning
+
+    float along = dot(uv, dir);                        // how far along dir this pixel is
+
+    vec3 col = mix(vec3(0.15, 0.25, 0.6), vec3(1.0, 0.6, 0.2), along * 0.5 + 0.5);
+    col *= 0.8 + 0.2 * sin(along * 30.0);              // stripes at right angles to dir
+
+    fragColor = vec4(col, 1.0);
+}
+</script>
+
+<h3>Which side of a line?</h3>
+<p>A straight line can be described by one point on it, <code>p</code>, and a unit arrow <code>n</code> sticking straight out of it (at right angles), called its <b>normal</b>. For any pixel, <code>dot(uv - p, n)</code> is how far the pixel is along n, measured from the line: positive on one side, negative on the other, zero on the line. Its absolute value is the distance to the line:</p>
+<script type="text/x-glsl" data-ex="line-side" data-title="dot with a normal: which side, and how far">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+
+    vec2 p = vec2(0.2, 0.0);                               // a point on the line
+    vec2 n = vec2(cos(iTime * 0.5), sin(iTime * 0.5));     // the line's normal (unit length)
+
+    float s = dot(uv - p, n);                              // signed distance to the line
+
+    vec3 col = s > 0.0 ? vec3(1.0, 0.55, 0.2) : vec3(0.25, 0.45, 0.9);   // which side
+    col *= 0.75 + 0.25 * cos(s * 50.0);                    // contours every 0.126
+    col = mix(col, vec3(1.0), step(abs(s), 0.01));         // the line itself: |s| small
+
+    fragColor = vec4(col, 1.0);
+}
+</script>
+<p>The orange side is the side the normal points to. The contour lines run parallel to the line, because every point on one of them is the same distance from it.</p>
+
+<h3>A lit ball from one dot product</h3>
+<p>Here's where the dot product earns its fame. A surface is brightest when it faces the light head-on and gets darker as it turns away, until it's dark when it faces away. "How much does the surface face the light?" is exactly the dot product of two unit vectors: the direction the surface faces (its normal) and the direction toward the light. This is called <b>diffuse</b> or <b>Lambert</b> lighting.</p>
+<p>For a ball of radius 1 seen from the front, every pixel inside the circle sees a point on the ball's surface. Pythagoras in 3D tells you how far that point sticks out toward you, z = √(1 − x² − y²). And on a ball, the outward direction at a surface point is just the arrow from the center to that point, so the normal is (x, y, z) itself:</p>
+<script type="text/x-glsl" data-ex="ball" data-title="Lambert lighting: brightness = dot(normal, light)">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    vec2 p = uv / 0.8;                                 // a ball of radius 0.8 on screen
+
+    vec3 col = vec3(0.01, 0.012, 0.02);                // background (dark: gamma brightens it)
+    float r2 = dot(p, p);                              // squared distance from the center
+    if (r2 < 1.0) {
+        float z = sqrt(1.0 - r2);                      // how far the surface sticks out
+        vec3 normal = vec3(p, z);                      // on a ball, the point is its own normal
+
+        vec3 light = normalize(vec3(cos(iTime), 0.6, sin(iTime) + 0.4));   // the light circles round
+        float diffuse = max(dot(normal, light), 0.0);  // facing away (negative) counts as 0
+
+        col = vec3(1.0, 0.6, 0.25) * (0.06 + diffuse); // a little ambient light plus diffuse
+    }
+    fragColor = vec4(pow(col, vec3(1.0 / 2.2)), 1.0);  // gamma, from Chapter 6
+}
+</script>
+<p>No 3D engine, no mesh, no lights in a scene graph. One square root, one normalize and one dot product per pixel. Every 3D shader in Chapters 13 and 14 lights its surfaces with this same line.</p>
+<aside class="aha"><p>The dot product measures agreement between directions. That one idea gives you gradients at any angle, the side of a line, distance to a line, projection and lighting.</p></aside>
+
+<h2 id="perpendicular">A quarter turn: the perpendicular</h2>
+<p>In 2D there's a neat trick for turning an arrow a quarter turn counterclockwise: swap its parts and negate the new x. The perpendicular of (x, y) is (−y, x). Check with the dot product: x × (−y) + y × x = 0, so they're at right angles. In GLSL: <code>vec2(-v.y, v.x)</code>. Chapter 9 uses it to build rotation, and Chapter 8 uses it for line segments.</p>
+
+<h2 id="three-d">Vectors in 3D, and the cross product</h2>
+<p>Everything above works the same for <code>vec3</code>: add, subtract, scale, length, distance, normalize and dot. 3D adds one new operation, the <b>cross product</b>. <code>cross(a, b)</code> returns a new vector that is perpendicular to both a and b:</p>
+<script type="text/x-glsl-snippet">
+vec3 up      = vec3(0.0, 1.0, 0.0);
+vec3 forward = vec3(0.0, 0.0, 1.0);
+vec3 side    = cross(up, forward);   // (1, 0, 0): at right angles to both
+</script>
+<p>Its length is |a| × |b| × sin θ, so it's zero when a and b point the same way. You won't need it until Chapter 14, where it builds a camera that can look at any point: given the direction the camera faces and which way is up, the cross product finds "right".</p>
+
+<h2 id="colors">Colors are vectors too</h2>
+<p>A <code>vec3</code> color is a vector in the RGB cube from Chapter 6, and the same operations have meanings there. <code>mix</code> slides along the straight line between two colors. Luminance, <code>dot(col, vec3(0.299, 0.587, 0.114))</code>, was a dot product all along: how far the color reaches in the direction of "perceived brightness". And <code>distance(colorA, colorB)</code> is a rough measure of how different two colors are.</p>
+
+<section class="summary">
+<h2>What you now know</h2>
+<ul>
+<li>A vector is a position or an arrow. Add arrows by walking one then the other; <code>b - a</code> is the arrow from a to b.</li>
+<li><code>uv - c</code> measures every pixel from c, as if c were the origin.</li>
+<li>Pythagoras: length = √(x² + y²). <code>length(v)</code>, <code>distance(a, b)</code> = <code>length(b - a)</code>.</li>
+<li>A shape is "everything closer than d"; changing how you measure distance changes the shape.</li>
+<li><code>normalize(v)</code> keeps the direction and sets the length to 1. Never normalize zero.</li>
+<li><code>dot(a, b)</code> = |a| |b| cos θ: positive when aligned, 0 when perpendicular, negative when opposite. With a unit vector it measures "how far along".</li>
+<li>Lighting: brightness = <code>max(dot(normal, light), 0.0)</code>.</li>
+<li>Perpendicular in 2D: <code>vec2(-v.y, v.x)</code>. In 3D, <code>cross(a, b)</code> is perpendicular to both.</li>
+</ul>
+</section>
+
+<div class="try" title="Exercises">
+<p><b>1.</b> Draw a ring (just the outline of a circle) of radius 0.5 and thickness 0.02, using <code>length</code> and <code>abs</code>.</p>
+<details><summary>Hint</summary><div><p>A pixel is on the ring when its distance from the center is close to 0.5, that is, when <code>abs(length(uv) - 0.5)</code> is small.</p></div></details>
+<p><b>2.</b> In the <code>closer</code> example, add a third point and give it its own color.</p>
+<p><b>3.</b> Make the ball's light follow the mouse.</p>
+<details><summary>Solution</summary><div><script type="text/x-glsl-snippet">
+vec2 m = (iMouse.xy * 2.0 - iResolution.xy) / iResolution.y;   // mouse in uv units
+vec3 light = normalize(vec3(m, 0.7));                          // up and out of the screen
+</script></div></details>
+<p><b>4.</b> In <code>dot-ramp</code>, what happens if <code>dir</code> isn't a unit vector, say <code>dir * 2.0</code>? Predict it, then try it.</p>
+<details><summary>Answer</summary><div><p>The dot product doubles everywhere, so the ramp changes twice as fast and the stripes are packed twice as tightly. The direction stays the same. That's why directions are kept at length 1: then the dot product measures real distance.</p></div></details>
+</div>
+<p><b>Go deeper:</b> <a href="https://www.youtube.com/playlist?list=PLZHQObOWTQDPD3MizzM2xVFitgF8hE_ab" target="_blank" rel="noopener">3Blue1Brown, Essence of Linear Algebra</a> (the first chapters, on vectors and the dot product), and <a href="https://natureofcode.com/vectors/" target="_blank" rel="noopener">The Nature of Code, chapter 1</a>, which you may have met before.</p>

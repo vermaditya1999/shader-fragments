@@ -1,0 +1,212 @@
+<!--meta
+{"num": 17, "slug": "how-the-gpu-works", "part": 3, "title": "How the GPU runs your shader", "summary": "CPU versus GPU, the graphics pipeline, the full-screen triangle, what the runner adds around mainImage, lockstep execution and divergence, floating point, NaN and what makes shaders slow.", "hero": "precision", "start": "precision"}
+-->
+<p class="lede">You've been writing <code>mainImage</code> and trusting that something calls it once per pixel. This chapter opens the box: what the graphics card actually is, the path from a triangle to a colored pixel, what the workbench wraps around your code, why an <code>if</code> can cost you both branches, and why numbers on a GPU aren't quite the numbers from math class.</p>
+
+<h2 id="cpu-gpu">A few professors, or a stadium of students</h2>
+<p>A <b>CPU</b>, the main processor, has a handful of very fast, very clever cores. Each one can follow a long, twisting chain of steps where every step depends on the last: running your browser, your operating system, a game's rules. Think of a few brilliant professors.</p>
+<p>A <b>GPU</b>, the graphics processor, has thousands of simpler cores. Each is slower and less clever than a CPU core, but they work together on one kind of job: the same small program, run on huge amounts of data at once. Think of a stadium full of students, each given one sum to do, all doing it at the same moment.</p>
+<p>A 1920 × 1080 canvas has about two million pixels. At 60 frames per second, that's about 124 million calls to <code>mainImage</code> every second. No CPU could keep up, but each call is independent of the others, which is exactly the shape of work a GPU is built for. That independence is also why a shader can't look at its neighbors' results or remember anything (until Chapter 15's trick): every pixel is computed by a different student who can't see anyone else's paper.</p>
+
+<h2 id="pipeline">The pipeline: from triangles to pixels</h2>
+<p>GPUs were designed to draw 3D models made of triangles. Every drawing goes through the same fixed sequence of stages, called the <b>graphics pipeline</b>:</p>
+<figure class="diagram">
+<svg viewBox="0 0 560 170" role="img" aria-label="The graphics pipeline: vertices go into the vertex shader, the rasterizer finds the covered pixels, the fragment shader colors each one, and the result lands in the framebuffer.">
+  <defs><marker id="arr17" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 L10 5 L0 10z" fill="currentColor"/></marker></defs>
+  <g stroke="currentColor" stroke-width="1.6" fill="none">
+    <rect x="6" y="20" width="92" height="70" rx="8"/>
+    <rect x="120" y="20" width="92" height="70" rx="8" fill="#4fb3c8" fill-opacity=".18"/>
+    <rect x="234" y="20" width="92" height="70" rx="8"/>
+    <rect x="348" y="20" width="92" height="70" rx="8" fill="#f2a33a" fill-opacity=".22"/>
+    <rect x="462" y="20" width="92" height="70" rx="8"/>
+    <path d="M98 55 H117" marker-end="url(#arr17)"/><path d="M212 55 H231" marker-end="url(#arr17)"/><path d="M326 55 H345" marker-end="url(#arr17)"/><path d="M440 55 H459" marker-end="url(#arr17)"/>
+  </g>
+  <g fill="currentColor"><circle cx="30" cy="70" r="3.5"/><circle cx="74" cy="70" r="3.5"/><circle cx="52" cy="38" r="3.5"/></g>
+  <g fill="currentColor" fill-opacity=".55"><rect x="262" y="58" width="8" height="8"/><rect x="272" y="58" width="8" height="8"/><rect x="282" y="58" width="8" height="8"/><rect x="292" y="58" width="8" height="8"/><rect x="272" y="48" width="8" height="8"/><rect x="282" y="48" width="8" height="8"/><rect x="277" y="38" width="8" height="8"/></g>
+  <g font-family="ui-monospace, monospace" font-size="12" fill="currentColor" text-anchor="middle">
+    <text x="52" y="14">vertices</text><text x="166" y="14">vertex shader</text><text x="280" y="14">rasterizer</text><text x="394" y="14">fragment shader</text><text x="508" y="14">framebuffer</text>
+    <text x="166" y="50">once per</text><text x="166" y="66">corner</text>
+    <text x="394" y="50">once per</text><text x="394" y="66">pixel</text>
+    <text x="508" y="50">screen</text><text x="508" y="66">or texture</text>
+    <text x="52" y="116" font-size="11" fill-opacity=".75">3 corners</text>
+    <text x="166" y="116" font-size="11" fill-opacity=".75">where does each</text><text x="166" y="131" font-size="11" fill-opacity=".75">corner go?</text>
+    <text x="280" y="116" font-size="11" fill-opacity=".75">which pixels does</text><text x="280" y="131" font-size="11" fill-opacity=".75">the triangle cover?</text>
+    <text x="394" y="116" font-size="11" fill-opacity=".75">what color is</text><text x="394" y="131" font-size="11" fill-opacity=".75">this pixel?</text>
+    <text x="508" y="116" font-size="11" fill-opacity=".75">store it</text>
+  </g>
+</svg>
+<figcaption>The two colored stages are programs you write: shaders. The others are fixed hardware.</figcaption>
+</figure>
+<ol>
+<li>The program hands the GPU a list of <b>vertices</b>, the corners of triangles.</li>
+<li>The <b>vertex shader</b> runs once per corner and says where on screen it lands. In a 3D game, this is where models get rotated, moved and put into perspective.</li>
+<li>The <b>rasterizer</b>, fixed hardware, works out which pixels each triangle covers.</li>
+<li>The <b>fragment shader</b> runs once for each covered pixel and returns its color. ("Fragment" because a pixel-sized piece of a triangle isn't yet a final pixel: in 3D, several triangles may cover the same spot, and only the nearest wins.)</li>
+<li>The colors land in a <b>framebuffer</b>: the screen, or a texture (Chapter 15).</li>
+</ol>
+<p>Everything in this course has been a fragment shader. So how do you get one to run on <em>every</em> pixel? Draw a single triangle big enough to cover the whole screen.</p>
+
+<h2 id="triangle">The full-screen triangle</h2>
+<p>The vertex shader places corners in <b>clip space</b>, a coordinate system where the visible screen always runs from −1 to 1 in both x and y, whatever its size in pixels. Anything outside is clipped away. One triangle with corners at (−1, −1), (3, −1) and (−1, 3) is big enough that the square −1..1 fits entirely inside it:</p>
+<figure class="diagram">
+<svg viewBox="0 0 330 290" role="img" aria-label="A large triangle with corners at minus 1 minus 1, 3 minus 1 and minus 1 3, completely covering the square from minus 1 to 1 that is the screen.">
+  <g transform="translate(20,0)">
+    <path d="M60 260 L260 260 L60 60 Z" fill="#f2a33a" fill-opacity=".18" stroke="currentColor" stroke-width="1.6"/>
+    <rect x="60" y="160" width="100" height="100" fill="#4fb3c8" fill-opacity=".35" stroke="currentColor" stroke-width="2"/>
+    <g fill="currentColor"><circle cx="60" cy="260" r="4"/><circle cx="260" cy="260" r="4"/><circle cx="60" cy="60" r="4"/></g>
+    <g font-family="ui-monospace, monospace" font-size="12" fill="currentColor">
+      <text x="12" y="280">(−1, −1)</text><text x="232" y="280">(3, −1)</text><text x="8" y="54">(−1, 3)</text>
+      <text x="74" y="206">the screen</text><text x="74" y="222">−1..1</text>
+      <text x="166" y="154">(1, 1)</text>
+      <text x="120" y="120" fill-opacity=".75">clipped away</text>
+    </g>
+  </g>
+</svg>
+<figcaption>One oversized triangle in clip space. The rasterizer only keeps the part inside the screen square, so the fragment shader runs exactly once for every pixel.</figcaption>
+</figure>
+<p>(Two triangles making a rectangle work too, and many runners use them. One triangle is slightly cheaper, because GPUs shade pixels in small groups, and groups straddling the diagonal seam between two triangles get shaded twice.)</p>
+<p>Here is the entire vertex shader this site uses. It receives each corner's position as an input called an <b>attribute</b> and passes it straight through:</p>
+<script type="text/x-glsl-snippet">
+#version 300 es
+in vec2 aPos;                                     // this corner's position: (-1,-1), (3,-1) or (-1,3)
+void main() { gl_Position = vec4(aPos, 0.0, 1.0); }   // already in clip space: pass it on
+</script>
+
+<h2 id="wrapper">What the workbench wraps around your code</h2>
+<p>A WebGL fragment shader doesn't have <code>mainImage</code>, <code>fragCoord</code> or <code>iTime</code>. Those are Shadertoy's conventions, and every runner, including this site's, makes them work by gluing a few lines above and below your code before compiling it. Here's the glue, exactly:</p>
+<script type="text/x-glsl-snippet">
+#version 300 es                  // which version of GLSL: "OpenGL ES 3.0", which WebGL2 uses
+precision highp float;           // use full 32-bit precision for floats (see below)
+precision highp int;
+precision highp sampler2D;
+uniform vec3 iResolution;        // every i-name is a uniform the runner fills in each frame
+uniform float iTime;
+uniform float iTimeDelta;
+uniform int iFrame;
+uniform vec4 iMouse;
+uniform vec4 iDate;
+uniform sampler2D iChannel0;
+uniform sampler2D iChannel1;
+out vec4 sf_FragColor;           // the real output of the fragment shader
+
+// ... your code goes here, including mainImage ...
+
+void main() {                    // the real entry point: GLSL always starts at main()
+    vec4 c = vec4(0.0, 0.0, 0.0, 1.0);
+    mainImage(c, gl_FragCoord.xy);        // gl_FragCoord: this pixel's center, built in
+    sf_FragColor = vec4(c.rgb, 1.0);
+}
+</script>
+<p>So <code>fragCoord</code> is simply <code>gl_FragCoord.xy</code>, which the rasterizer provides: the pixel's center, in pixels, with (0.5, 0.5) at the bottom-left (Chapter 3). And when an error message mentions a line number, the workbench subtracts the 13 lines of glue above your code, so the number matches what you see. Chapter 18 builds a runner that does all this in about 100 lines of JavaScript.</p>
+
+<h2 id="inputs">Four ways data gets in</h2>
+<ul>
+<li><b>Attributes</b>: values attached to each vertex, like aPos. Only the vertex shader sees them.</li>
+<li><b>Varyings</b>: values the vertex shader outputs per corner, which the rasterizer smoothly blends across the triangle for each pixel (a <code>mix</code> between three corners). In 3D rendering they carry things like texture coordinates. Our full-screen shaders don't need any, since <code>gl_FragCoord</code> already says where each pixel is.</li>
+<li><b>Uniforms</b>: values that are the same for every vertex and pixel in one draw, set by JavaScript before drawing. iTime, iResolution and iMouse are uniforms (Chapter 1).</li>
+<li><b>Textures</b>: images the shader can read anywhere (Chapter 15).</li>
+</ul>
+<p>And one way out: the fragment shader's <code>out vec4</code>, one color per pixel, written to its own pixel only. A shader can read from anywhere in a texture, but it can only write to the pixel it was called for. That asymmetry shapes every technique in this course: it's why Chapter 15's dye had to look upstream instead of pushing downstream.</p>
+
+<h2 id="lockstep">Lockstep: why an if can cost both branches</h2>
+<p>The thousands of GPU cores aren't fully independent. They're organized in groups, typically of 32 or 64 (NVIDIA calls them <b>warps</b>, AMD <b>wavefronts</b>), and every core in a group executes <em>the same instruction at the same time</em>, each on its own pixel. This is called <b>SIMT</b>: single instruction, multiple threads. It's what makes GPUs so efficient: one instruction decoder drives dozens of calculators.</p>
+<p>Now consider an <code>if</code>. If every pixel in a group takes the same branch, there's no problem. But if some go one way and some the other, the group can't split up. It runs the first branch with the other pixels switched off, then the second branch with the first ones switched off. The group pays for both:</p>
+<figure class="diagram">
+<svg viewBox="0 0 540 175" role="img" aria-label="Eight pixels in one group. For the line if uv.x greater than 0.5, the first three take branch A and the other five take branch B, so the group spends time on both, with some pixels idle each time.">
+  <g font-family="ui-monospace, monospace" font-size="12" fill="currentColor">
+    <text x="6" y="34">if (uv.x &gt; 0.5)</text>
+    <text x="6" y="84">  branch A</text>
+    <text x="6" y="134">  branch B</text>
+    <text x="196" y="166" fill-opacity=".75">8 pixels in one group →</text>
+  </g>
+  <g transform="translate(200,14)">
+    <g fill="#4fb3c8" fill-opacity=".55"><rect x="0" y="0" width="34" height="28" rx="4"/><rect x="40" y="0" width="34" height="28" rx="4"/><rect x="80" y="0" width="34" height="28" rx="4"/><rect x="120" y="0" width="34" height="28" rx="4"/><rect x="160" y="0" width="34" height="28" rx="4"/><rect x="200" y="0" width="34" height="28" rx="4"/><rect x="240" y="0" width="34" height="28" rx="4"/><rect x="280" y="0" width="34" height="28" rx="4"/></g>
+    <g fill="#f2a33a" fill-opacity=".75"><rect x="0" y="50" width="34" height="28" rx="4"/><rect x="40" y="50" width="34" height="28" rx="4"/><rect x="80" y="50" width="34" height="28" rx="4"/></g>
+    <g fill="currentColor" fill-opacity=".1"><rect x="120" y="50" width="34" height="28" rx="4"/><rect x="160" y="50" width="34" height="28" rx="4"/><rect x="200" y="50" width="34" height="28" rx="4"/><rect x="240" y="50" width="34" height="28" rx="4"/><rect x="280" y="50" width="34" height="28" rx="4"/>
+      <rect x="0" y="100" width="34" height="28" rx="4"/><rect x="40" y="100" width="34" height="28" rx="4"/><rect x="80" y="100" width="34" height="28" rx="4"/></g>
+    <g fill="#d0569c" fill-opacity=".6"><rect x="120" y="100" width="34" height="28" rx="4"/><rect x="160" y="100" width="34" height="28" rx="4"/><rect x="200" y="100" width="34" height="28" rx="4"/><rect x="240" y="100" width="34" height="28" rx="4"/><rect x="280" y="100" width="34" height="28" rx="4"/></g>
+  </g>
+</svg>
+<figcaption>Colored: pixels doing work. Grey: pixels sitting idle while the rest of their group runs the other branch.</figcaption>
+</figure>
+<p>This is called <b>divergence</b>, and it has practical consequences:</p>
+<ul>
+<li>A branch that's the same for every pixel (it depends only on uniforms, like <code>if (iTime &gt; 10.0)</code>) costs nothing extra.</li>
+<li>A branch that differs between neighboring pixels costs roughly both sides wherever the boundary passes. Usually that's fine; it only matters when both sides are expensive.</li>
+<li>Loops are the big one. A group can't finish until its <em>slowest</em> pixel finishes. Chapter 13's step heat map showed that rays grazing an edge need the most steps, and every group along an edge waits for them.</li>
+</ul>
+<p>Groups are built from little 2 × 2 blocks of pixels called <b>quads</b>, and that's the secret behind Chapter 8's promise. <code>dFdx(v)</code> is simply the difference between v in this pixel and in its horizontal neighbor within the quad, <code>dFdy(v)</code> the vertical one, and <code>fwidth(v)</code> is <code>abs(dFdx(v)) + abs(dFdy(v))</code>. Neighbors running in lockstep can compare notes for free.</p>
+
+<h2 id="floats">Numbers on a GPU: floating point</h2>
+<p>A <code>float</code> is stored in 32 bits, like scientific notation in binary: about 7 significant digits, times a power of two. That has a consequence you can see: the bigger a number is, the coarser the steps between the numbers a float can represent. Near 1 the gap between neighboring floats is about 0.0000001; near 1,000 it's about 0.00006; near 10,000 it's about 0.001.</p>
+<p>This example draws the same smooth ramp four times. Each strip computes it from a number that changes by only 0.001 across the strip, but sitting at a different size: near 1, 100, 1,000 and 10,000:</p>
+<script type="text/x-glsl" data-ex="precision" data-title="The same ramp, computed near 1, 100, 1,000 and 10,000 (top to bottom)">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    float strip = floor(uv.y * 4.0);                     // 3 at the top .. 0 at the bottom
+
+    float big = strip == 3.0 ? 1.0 : strip == 2.0 ? 100.0 : strip == 1.0 ? 1000.0 : 10000.0;
+    big += min(iTime, 0.0);                  // always 0: stops the compiler doing the math for us
+
+    float x = big + uv.x * 0.001;            // a number near 'big', changing by just 0.001 across
+    float ramp = fract(x) * 1000.0;          // remove 'big' again, and stretch 0..0.001 to 0..1
+
+    vec3 col = vec3(ramp) * vec3(1.0, 0.75, 0.45);
+    if (fract(uv.y * 4.0) < 0.02) col = vec3(0.1);       // gaps between the strips
+    fragColor = vec4(col, 1.0);
+}
+</script>
+<p>Near 1 the ramp is smooth. Near 100 it's faintly stepped, near 1,000 it's a staircase, and near 10,000 there are only a couple of steps left: the float simply can't hold "10000.000417". Real shaders hit this in three common ways:</p>
+<ul>
+<li><b>iTime grows.</b> After a few hours, <code>sin(iTime * 50.0)</code> gets choppy, because iTime is large and its fine detail is gone. Shaders that must run for days use <code>mod(iTime, period)</code>.</li>
+<li><b>Far from the origin.</b> Coordinates of 100,000 in a 3D world lose the precision to place small details, which is why terrain flights eventually jitter.</li>
+<li><b>The sine hash.</b> Chapter 11's <code>fract(sin(x) * 43758.5453)</code> multiplies by a large number on purpose; with large inputs it runs out of digits and starts showing patterns.</li>
+</ul>
+<p>The <code>precision highp float</code> line in the glue asks for full 32-bit floats. Older mobile GPUs also offered <code>mediump</code>, often 16-bit with only about 3 significant digits, which is why that line matters.</p>
+
+<h3>When math breaks: NaN and infinity</h3>
+<p>Some operations have no real answer. Dividing a positive number by zero usually gives <b>infinity</b>. The square root of a negative number, <code>log</code> of a negative number, <code>0.0 / 0.0</code>, or <code>pow</code> of a negative base are officially "undefined" in GLSL, and on most GPUs that means <b>NaN</b>, "not a number". NaN is contagious: anything computed from it is also NaN, and every comparison with it is false. What NaN looks like on screen isn't defined: often black, sometimes garbage, and it can differ between GPUs, which makes it a classic "works on my machine" bug.</p>
+<script type="text/x-glsl" data-ex="nan" data-title="sqrt of negative numbers: NaN (top as-is, bottom flagged in magenta)">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+
+    float v = sqrt(uv.x) * 0.8;          // on the left, uv.x < 0: sqrt has no answer, v is NaN
+    vec3 col = vec3(v) * vec3(1.0, 0.7, 0.4);          // NaN spreads into the color
+
+    if (uv.y < 0.0 && isnan(v)) col = vec3(1.0, 0.0, 1.0);   // bottom half: catch it and show it
+    fragColor = vec4(col, 1.0);
+}
+</script>
+<p>Chapter 19 turns this into a habit: when something is mysteriously black, check for NaN first.</p>
+
+<h2 id="cost">What makes a shader slow</h2>
+<p>The cost of a frame is roughly <em>number of pixels × work per pixel</em>. Some rules of thumb follow from everything above:</p>
+<ul>
+<li><b>Resolution counts twice.</b> Halving the width and height quarters the number of pixels. That's why the workbench quietly lowers its resolution when a shader runs slower than about 28 frames per second, and why a heavy shader can be lovely at a small size and stutter full-screen.</li>
+<li><b>Loops multiply everything inside them.</b> A raymarch of 100 steps calling a <code>map</code> with an fBm of 6 octaves is 600 noise evaluations per pixel, and the normal calls <code>map</code> six more times. Fewer steps, fewer octaves, or a cheaper <code>map</code> make a big difference.</li>
+<li><b>The slowest pixel sets the pace</b> for its group, so expensive work along edges and in grazing rays dominates.</li>
+<li><b>Exit early.</b> Break out of loops as soon as the answer is known, and skip expensive lighting for pixels that hit the sky.</li>
+<li><b>Precompute.</b> Anything that doesn't change every frame can be computed once into a buffer (Chapter 15) and read back as a texture.</li>
+</ul>
+<aside class="aha"><p>A GPU is a stadium of students doing the same sum in lockstep, each on their own pixel, each writing only their own answer. Every rule of shader programming, from "no memory" to "branches cost both sides", follows from that picture.</p></aside>
+
+<section class="summary">
+<h2>What you now know</h2>
+<ul>
+<li>GPUs run one small program on huge amounts of data in parallel; each pixel is independent.</li>
+<li>The pipeline: vertices → vertex shader → rasterizer → fragment shader → framebuffer.</li>
+<li>Shadertoy-style shaders draw one triangle that covers clip space (−1..1), so the fragment shader runs once per pixel.</li>
+<li>Runners wrap mainImage with uniforms and a real <code>main()</code>; <code>fragCoord</code> is <code>gl_FragCoord.xy</code>.</li>
+<li>Data comes in as attributes, varyings, uniforms and textures; a fragment shader writes only its own pixel.</li>
+<li>Groups of 32–64 pixels run in lockstep: divergent branches run both sides, loops wait for the slowest pixel. Derivatives come from 2 × 2 quads.</li>
+<li>Floats have about 7 significant digits: big numbers lose fine detail. NaN spreads and looks different on different GPUs.</li>
+</ul>
+</section>
+
+<div class="try" title="Exercises">
+<p><b>1.</b> In <code>precision</code>, change the 0.001 to 0.1 and the 1000.0 to 10.0, so the ramp spans a wider range. Which strips become smooth again, and why?</p>
+<details><summary>Answer</summary><div><p>All but the bottom one. The ramp now spans a range 100 times wider, so it covers 100 times more of the representable steps. Near 10,000 the steps are about 0.001 apart, so a range of 0.1 holds about 100 of them: still visibly banded on a wide screen. Precision problems are always about the ratio between the size of a number and the size of the detail you need.</p></div></details>
+<p><b>2.</b> Make a shader that shows black where <code>iTime</code> has been running for less than 10 seconds and white after. Is this <code>if</code> divergent?</p>
+<p><b>3.</b> Open Chapter 14's <code>terrain</code> in the workbench and halve the loop count and the octave count. How much worse does it look? Hold the result against how much faster it should run.</p>
+</div>
+<p><b>Go deeper:</b> <a href="https://www.youtube.com/watch?v=C8YtdC8mxTU" target="_blank" rel="noopener">Branch Education, How do Video Game Graphics Work?</a>, a beautifully animated tour of the pipeline from triangles to pixels, and <a href="https://webgl2fundamentals.org/webgl/lessons/webgl-how-it-works.html" target="_blank" rel="noopener">WebGL2 Fundamentals, How It Works</a>, which walks through the pipeline with code.</p>

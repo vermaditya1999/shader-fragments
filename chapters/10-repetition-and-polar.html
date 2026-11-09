@@ -1,0 +1,590 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>10. Repetition, symmetry and polar coordinates · Shader Fragments</title>
+<meta name="description" content="Infinite copies with fract, tile ids with floor, mirrors with abs, polar coordinates from zero, gears, kaleidoscopes and a tunnel.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="../assets/icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+
+</head>
+<body data-page="chapter" data-root="..">
+<header class="top"><div class="top-in">
+  <a class="logo" href="../index.html"><span class="logo-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="word">Shader Fragments</span></a>
+  <nav class="nav" aria-label="Main"><a href="../index.html#contents">Contents</a><a href="../reference.html">Reference</a><a href="../playground.html">Playground</a></nav>
+</div></header>
+<main>
+<div class="wrap"><div class="chapter">
+<header class="ch-head">
+  <p class="eyebrow"><b>Part I · Foundations</b> · Chapter 10</p>
+  <h1>Repetition, symmetry and polar coordinates</h1>
+  <p class="lede">A shader can't copy a shape: there's no shape to copy, only pixels asking questions. But it can bend space so that many different pixels end up asking the <em>same</em> question. That's how one circle becomes a thousand, one tooth becomes a gear, and one wedge becomes a kaleidoscope, without a single loop.</p>
+  <details class="ch-toc" open><summary>In this chapter</summary><ol><li><a href="#tiles">Tiling: fract makes copies</a></li><li><a href="#ids">Which tile am I in? floor</a></li><li><a href="#mirror">Mirrors: abs</a></li><li><a href="#polar">Polar coordinates, from zero</a></li><li><a href="#angular">Angular repetition: one tooth, a whole gear</a></li><li><a href="#kaleidoscope">Kaleidoscopes</a></li><li><a href="#tunnel">An infinite tunnel</a></li></ol></details>
+</header>
+<aside class="stage" id="workbench" data-start="tiles" aria-label="Workbench: live shader and code"></aside>
+<article class="ch-body">
+
+
+
+<h2 id="tiles"><span class="sec-n">10.1</span>Tiling: fract makes copies</h2>
+<p>Recall <code>fract(x)</code> from Chapter 4: it keeps only the part after the decimal point, so it climbs from 0 to 1 and jumps back, over and over. Apply it to coordinates and every unit square of space gets its own copy of the 0..1 range. Scale first to choose how many squares fit, and subtract 0.5 to put each square's origin at its center:</p>
+<figure class="ex" id="ex-tiles" data-ex="tiles" data-label="Example 10.1" data-title="fract: every tile asks the same question" data-cfg='{}'><figcaption><span class="ex-n">Example 10.1</span><span>fract: every tile asks the same question</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float n = 4.0;                          // tiles per unit
+    float px = 2.0 * n / iResolution.y;     // one pixel, in tile units
+
+    vec2 p = uv * n;                        // now one tile is one unit
+    vec2 local = fract(p) - 0.5;            // this pixel's position inside its tile, -0.5..0.5
+    float d = length(local) - 0.3;          // one circle, centered in the tile
+
+    vec3 col = mix(vec3(0.08, 0.09, 0.12), vec3(1.0, 0.6, 0.2), 1.0 - smoothstep(-px, px, d));
+    vec2 edge = 0.5 - abs(local);           // distance to the tile's border
+    col += 0.15 * (1.0 - smoothstep(0.0, px, min(edge.x, edge.y)));   // draw the borders
+
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float n = 4.0;                          // tiles per unit
+    float px = 2.0 * n / iResolution.y;     // one pixel, in tile units
+
+    vec2 p = uv * n;                        // now one tile is one unit
+    vec2 local = fract(p) - 0.5;            // this pixel's position inside its tile, -0.5..0.5
+    float d = length(local) - 0.3;          // one circle, centered in the tile
+
+    vec3 col = mix(vec3(0.08, 0.09, 0.12), vec3(1.0, 0.6, 0.2), 1.0 - smoothstep(-px, px, d));
+    vec2 edge = 0.5 - abs(local);           // distance to the tile's border
+    col += 0.15 * (1.0 - smoothstep(0.0, px, min(edge.x, edge.y)));   // draw the borders
+
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<p>The code describes one circle in one tile. But every pixel on the canvas computes <code>local</code> the same way, so every tile ends up asking about the same circle. Infinite copies, for the price of one <code>fract</code>.</p>
+<details class="predict"><summary>Make the circle's radius 0.6, bigger than half a tile. What do you expect to see?</summary>
+<div><p>Circles cut off into squares. Each pixel only ever asks about the copy in its own tile, so a shape that pokes into the next tile simply isn't there: that tile's pixels are asking about <em>its</em> copy. To let shapes overlap tile borders you'd have to check the neighboring tiles too, which is exactly the trick Voronoi uses in Chapter 11.</p></div></details>
+
+<h2 id="ids"><span class="sec-n">10.2</span>Which tile am I in? floor</h2>
+<p><code>floor(x)</code> is fract's partner: it keeps only the whole-number part, so <code>floor(p)</code> is the same for every pixel in a tile and different for each tile. It's the tile's <b>id</b>, its address in the grid, like (2, −1). Every pixel can split its position into "which tile" and "where in the tile":</p>
+<div class="formula">p  =  floor(p)  +  fract(p)
+       which tile   where inside it</div>
+<p>With an id, tiles can differ. A checkerboard is just "is the id's x plus y even or odd?", and the id can set each tile's size, color or timing:</p>
+<figure class="ex" id="ex-tile-ids" data-ex="tile-ids" data-label="Example 10.2" data-title="floor gives each tile an id, and the id makes tiles differ" data-cfg='{}'><figcaption><span class="ex-n">Example 10.2</span><span>floor gives each tile an id, and the id makes tiles differ</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float n = 5.0;
+    float px = 2.0 * n / iResolution.y;
+
+    vec2 p = uv * n;
+    vec2 id = floor(p);                              // which tile: whole numbers
+    vec2 local = fract(p) - 0.5;                     // where in the tile
+
+    float checker = mod(id.x + id.y, 2.0);           // 0, 1, 0, 1... like a chessboard
+    vec3 col = mix(vec3(0.09, 0.1, 0.14), vec3(0.14, 0.15, 0.2), checker);
+
+    float phase = id.x * 0.7 + id.y * 1.3;           // a different number for every tile
+    float r = 0.25 + 0.15 * sin(iTime * 2.0 + phase);
+    vec3 ink = 0.5 + 0.5 * cos(6.28318 * (id.x * 0.08 + id.y * 0.05 + vec3(0.0, 0.33, 0.67)));
+    col = mix(col, ink, 1.0 - smoothstep(-px, px, length(local) - r));
+
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float n = 5.0;
+    float px = 2.0 * n / iResolution.y;
+
+    vec2 p = uv * n;
+    vec2 id = floor(p);                              // which tile: whole numbers
+    vec2 local = fract(p) - 0.5;                     // where in the tile
+
+    float checker = mod(id.x + id.y, 2.0);           // 0, 1, 0, 1... like a chessboard
+    vec3 col = mix(vec3(0.09, 0.1, 0.14), vec3(0.14, 0.15, 0.2), checker);
+
+    float phase = id.x * 0.7 + id.y * 1.3;           // a different number for every tile
+    float r = 0.25 + 0.15 * sin(iTime * 2.0 + phase);
+    vec3 ink = 0.5 + 0.5 * cos(6.28318 * (id.x * 0.08 + id.y * 0.05 + vec3(0.0, 0.33, 0.67)));
+    col = mix(col, ink, 1.0 - smoothstep(-px, px, length(local) - r));
+
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<p>Brick walls use one more trick: shift every other row by half a tile before splitting. The row number is <code>floor(p.y)</code>, and <code>mod(row, 2.0)</code> is 1 on odd rows:</p>
+<figure class="ex" id="ex-bricks" data-ex="bricks" data-label="Example 10.3" data-title="Bricks: offset every other row by half a brick" data-cfg='{}'><figcaption><span class="ex-n">Example 10.3</span><span>Bricks: offset every other row by half a brick</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.y;
+    vec2 brick = vec2(0.24, 0.1);                    // brick size, in uv units
+
+    vec2 p = uv / brick;                             // one brick = one unit
+    p.x += 0.5 * mod(floor(p.y), 2.0);               // odd rows slide half a brick
+    vec2 id = floor(p);
+    vec2 local = fract(p);
+
+    vec2 e = min(local, 1.0 - local) * brick;        // distance to this brick's edges, in uv units
+    float mortar = min(e.x, e.y);
+
+    float shade = 0.8 + 0.2 * sin(id.x * 3.7 + id.y * 5.3);   // vary each brick a little
+    vec3 col = vec3(0.7, 0.3, 0.2) * shade;
+    col = mix(vec3(0.85, 0.82, 0.75), col, smoothstep(0.004, 0.006, mortar));
+
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.y;
+    vec2 brick = vec2(0.24, 0.1);                    // brick size, in uv units
+
+    vec2 p = uv / brick;                             // one brick = one unit
+    p.x += 0.5 * mod(floor(p.y), 2.0);               // odd rows slide half a brick
+    vec2 id = floor(p);
+    vec2 local = fract(p);
+
+    vec2 e = min(local, 1.0 - local) * brick;        // distance to this brick's edges, in uv units
+    float mortar = min(e.x, e.y);
+
+    float shade = 0.8 + 0.2 * sin(id.x * 3.7 + id.y * 5.3);   // vary each brick a little
+    vec3 col = vec3(0.7, 0.3, 0.2) * shade;
+    col = mix(vec3(0.85, 0.82, 0.75), col, smoothstep(0.004, 0.006, mortar));
+
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+
+<h2 id="mirror"><span class="sec-n">10.3</span>Mirrors: abs</h2>
+<p><code>abs(p.x)</code> turns every negative x positive. Every pixel on the left asks the question its mirror image on the right would ask, so whatever you draw on the right appears reflected on the left. <code>abs(p)</code> on both parts mirrors all four quarters. This is the same fold that built the box in Chapter 8:</p>
+<figure class="ex" id="ex-mirror" data-ex="mirror" data-label="Example 10.4" data-title="One fold: blobs that only exist on the right, mirrored" data-cfg='{}'><figcaption><span class="ex-n">Example 10.4</span><span>One fold: blobs that only exist on the right, mirrored</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>float smin(float a, float b, float k) {
+    float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+    return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    vec2 p = uv;
+    p.x = abs(p.x);                     // the fold: comment this out to see the unmirrored blobs
+
+    float d = 100.0;
+    for (int i = 0; i &lt; 5; i++) {       // five blobs wandering around the right-hand side
+        float fi = float(i);
+        vec2 c = vec2(0.15 + 0.6 * (0.5 + 0.5 * sin(iTime * 0.6 + fi * 2.0)),
+                      0.6 * sin(iTime * 0.45 + fi * 1.7));
+        d = smin(d, length(p - c) - 0.1, 0.25);
+    }
+
+    vec3 col = vec3(0.05, 0.05, 0.08);
+    col += vec3(0.4, 0.5, 1.0) * 0.008 / max(abs(d), 0.003);
+    col = mix(col, vec3(0.95, 0.9, 1.0), 1.0 - smoothstep(-px, px, d));
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+float smin(float a, float b, float k) {
+    float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
+    return mix(b, a, h) - k * h * (1.0 - h);
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    vec2 p = uv;
+    p.x = abs(p.x);                     // the fold: comment this out to see the unmirrored blobs
+
+    float d = 100.0;
+    for (int i = 0; i < 5; i++) {       // five blobs wandering around the right-hand side
+        float fi = float(i);
+        vec2 c = vec2(0.15 + 0.6 * (0.5 + 0.5 * sin(iTime * 0.6 + fi * 2.0)),
+                      0.6 * sin(iTime * 0.45 + fi * 1.7));
+        d = smin(d, length(p - c) - 0.1, 0.25);
+    }
+
+    vec3 col = vec3(0.05, 0.05, 0.08);
+    col += vec3(0.4, 0.5, 1.0) * 0.008 / max(abs(d), 0.003);
+    col = mix(col, vec3(0.95, 0.9, 1.0), 1.0 - smoothstep(-px, px, d));
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<p>Five blobs, ten on screen, all of them symmetric, and the blobs that cross the middle merge with their own reflections. Faces, butterflies and inkblots all come from this one line.</p>
+
+<h2 id="polar"><span class="sec-n">10.4</span>Polar coordinates, from zero</h2>
+<p>So far, every position has been "how far right, how far up": <b>Cartesian</b> coordinates, after the philosopher Descartes. There's another way to say where a point is: "how far from the center, and in which direction". That's <b>polar</b> coordinates: a radius <code>r</code> and an angle <code>a</code>.</p>
+<aside class="box math"><span class="box-t">Math from zero: converting between the two</span>
+<p><b>Polar to Cartesian</b> is the unit circle from Chapter 5, scaled: the point at angle a on a circle of radius r is</p>
+<div class="formula">p = r * vec2(cos(a), sin(a))</div>
+<p><b>Cartesian to polar</b> goes the other way. The radius is the distance from the center, <code>length(p)</code>. The angle needs the inverse of cos and sin: given a point, which angle points at it? That's the <b>arctangent</b>. GLSL's two-argument version, <code>atan(p.y, p.x)</code> (note: y first), returns the angle from the positive x axis, counterclockwise, in radians from −π to π.</p>
+<div class="formula">r = length(p)
+a = atan(p.y, p.x)          // -π (pointing left, from below) .. π (pointing left, from above)</div>
+<p>Why −π to π and not 0 to 2π? Both describe a full turn. The jump from π back to −π happens on the negative x axis, the line pointing left from the center. Remember that line; it's called the <b>seam</b>, and it causes one classic bug, coming up shortly.</p>
+</aside>
+<p>Polar coordinates are just another grid, bent around a point. Draw ordinary grid lines in (angle, radius) and you get a spiderweb: lines of equal radius are rings, and lines of equal angle are rays:</p>
+<figure class="ex" id="ex-polar-grid" data-ex="polar-grid" data-label="Example 10.5" data-title="A grid drawn in polar coordinates: rings and rays" data-cfg='{}'><figcaption><span class="ex-n">Example 10.5</span><span>A grid drawn in polar coordinates: rings and rays</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    float r = length(uv);                     // distance from the center
+    float a = atan(uv.y, uv.x);               // angle, -π..π
+
+    // grid coordinates: 12 slices around, 5 rings per unit of radius
+    vec2 g = vec2(a / 6.28318 * 12.0, r * 5.0);
+    vec2 toLine = abs(fract(g + 0.5) - 0.5);  // distance to the nearest grid line, in grid units
+    // one pixel in grid units: around the circle a pixel covers px / r radians
+    vec2 pxg = vec2(px / r / 6.28318 * 12.0, px * 5.0);
+    float lines = 1.0 - smoothstep(0.0, 1.5, min(toLine.x / pxg.x, toLine.y / pxg.y));
+
+    vec3 col = 0.25 * (0.5 + 0.5 * cos(a + vec3(0.0, 2.1, 4.2)));   // hue follows the angle
+    col += lines * vec3(1.0, 0.85, 0.6);
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    float r = length(uv);                     // distance from the center
+    float a = atan(uv.y, uv.x);               // angle, -π..π
+
+    // grid coordinates: 12 slices around, 5 rings per unit of radius
+    vec2 g = vec2(a / 6.28318 * 12.0, r * 5.0);
+    vec2 toLine = abs(fract(g + 0.5) - 0.5);  // distance to the nearest grid line, in grid units
+    // one pixel in grid units: around the circle a pixel covers px / r radians
+    vec2 pxg = vec2(px / r / 6.28318 * 12.0, px * 5.0);
+    float lines = 1.0 - smoothstep(0.0, 1.5, min(toLine.x / pxg.x, toLine.y / pxg.y));
+
+    vec3 col = 0.25 * (0.5 + 0.5 * cos(a + vec3(0.0, 2.1, 4.2)));   // hue follows the angle
+    col += lines * vec3(1.0, 0.85, 0.6);
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<p>Anything that's awkward in x and y but natural in "distance and direction" becomes easy here.</p>
+
+<h3>Flowers, stars and spirals</h3>
+<p>In polar coordinates a circle is simply <code>r &lt; radius</code>. Let the radius depend on the angle, and the circle's edge wobbles: five bumps around the circle make five petals:</p>
+<figure class="ex" id="ex-flower" data-ex="flower" data-label="Example 10.6" data-title="A flower: a circle whose radius depends on the angle" data-cfg='{}'><figcaption><span class="ex-n">Example 10.6</span><span>A flower: a circle whose radius depends on the angle</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    float r = length(uv);
+    float a = atan(uv.y, uv.x);
+
+    float petals = 5.0;                                   // try 3.0, 8.0, or 5.5
+    float edge = 0.5 + 0.15 * cos(a * petals + iTime);    // the edge's radius at this angle
+    float d = r - edge;                                   // roughly the distance to the edge
+
+    vec3 col = vec3(0.07, 0.1, 0.08);
+    vec3 petal = mix(vec3(1.0, 0.85, 0.3), vec3(0.95, 0.35, 0.45), smoothstep(0.1, 0.55, r));
+    col = mix(col, petal, 1.0 - smoothstep(-px, px, d));
+    col = mix(col, vec3(0.35, 0.2, 0.1), 1.0 - smoothstep(-px, px, r - 0.12));   // the center
+
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    float r = length(uv);
+    float a = atan(uv.y, uv.x);
+
+    float petals = 5.0;                                   // try 3.0, 8.0, or 5.5
+    float edge = 0.5 + 0.15 * cos(a * petals + iTime);    // the edge's radius at this angle
+    float d = r - edge;                                   // roughly the distance to the edge
+
+    vec3 col = vec3(0.07, 0.1, 0.08);
+    vec3 petal = mix(vec3(1.0, 0.85, 0.3), vec3(0.95, 0.35, 0.45), smoothstep(0.1, 0.55, r));
+    col = mix(col, petal, 1.0 - smoothstep(-px, px, d));
+    col = mix(col, vec3(0.35, 0.2, 0.1), 1.0 - smoothstep(-px, px, r - 0.12));   // the center
+
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<details class="predict"><summary>Set petals to 5.5. What goes wrong, and where?</summary>
+<div><p>A crack appears on the left side, along the seam. As the angle crosses the seam it jumps from π to −π, a jump of a full turn. With 5 petals, <code>cos(a * 5.0)</code> jumps by 5 full turns, which cos doesn't notice. With 5.5 it jumps by 5.5 turns, and half a turn of cos is a flip from +1 to −1. The rule: anything you do with the angle must repeat a <b>whole number</b> of times around the circle.</p></div></details>
+<p>A spiral is a stripe that depends on angle and radius at once. As you go around, the stripe moves outward:</p>
+<figure class="ex" id="ex-spiral" data-ex="spiral" data-label="Example 10.7" data-title="Spirals: stripes in angle and radius together" data-cfg='{}'><figcaption><span class="ex-n">Example 10.7</span><span>Spirals: stripes in angle and radius together</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+
+    float r = length(uv);
+    float turns = atan(uv.y, uv.x) / 6.28318;          // -0.5..0.5 for one turn around
+
+    float arms = 3.0;                                  // a whole number, because of the seam
+    float s = turns * arms + r * 2.0 - iTime * 0.3;    // constant along each spiral arm
+    float band = 0.5 + 0.5 * sin(s * 6.28318);
+
+    vec3 col = mix(vec3(0.08, 0.1, 0.25), vec3(1.0, 0.6, 0.25), band);
+    col *= smoothstep(0.0, 0.25, r);                   // fade out the crowded center
+
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+
+    float r = length(uv);
+    float turns = atan(uv.y, uv.x) / 6.28318;          // -0.5..0.5 for one turn around
+
+    float arms = 3.0;                                  // a whole number, because of the seam
+    float s = turns * arms + r * 2.0 - iTime * 0.3;    // constant along each spiral arm
+    float band = 0.5 + 0.5 * sin(s * 6.28318);
+
+    vec3 col = mix(vec3(0.08, 0.1, 0.25), vec3(1.0, 0.6, 0.25), band);
+    col *= smoothstep(0.0, 0.25, r);                   // fade out the crowded center
+
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<p>Try <code>r * 2.0</code> → <code>log(r) * 2.0</code> for a logarithmic spiral (the shape of nautilus shells and galaxies), or drop the radius term entirely to get a sunburst of straight rays.</p>
+
+<h2 id="angular"><span class="sec-n">10.5</span>Angular repetition: one tooth, a whole gear</h2>
+<p>Tiling with fract repeats space in a grid. The same trick works around a circle. Divide the full turn into n equal slices. For each pixel, work out its angle <em>within its own slice</em>, then convert back to x and y. Every slice now maps onto the first one, so a shape drawn once, on the positive x axis, appears in every slice:</p>
+<pre class="snip"><code>float sector = 6.28318 / n;                                  // angle of one slice
+float a = mod(atan(p.y, p.x) + sector * 0.5, sector) - sector * 0.5;   // -half..half
+vec2 q = length(p) * vec2(cos(a), sin(a));                   // back to x, y, inside slice 0</code></pre>
+<p>The <code>+ sector * 0.5</code> and <code>- sector * 0.5</code> center the slice on the x axis, so the shape you draw there isn't cut in half by the slice's edge. Here a single tooth and a single window make a gear, with two different repetition counts:</p>
+<figure class="ex long" id="ex-gear" data-ex="gear" data-label="Example 10.8" data-title="A gear: one tooth repeated 12 times, one window repeated 5 times" data-cfg='{}'><figcaption><span class="ex-n">Example 10.8</span><span>A gear: one tooth repeated 12 times, one window repeated 5 times</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>float sdBox(vec2 p, vec2 b) {
+    vec2 q = abs(p) - b;
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
+}
+
+// Fold p into the first of n slices around the center.
+vec2 repeatAngle(vec2 p, float n) {
+    float sector = 6.28318 / n;
+    float a = mod(atan(p.y, p.x) + sector * 0.5, sector) - sector * 0.5;
+    return length(p) * vec2(cos(a), sin(a));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    float spin = iTime * 0.5;                          // turn the gear (Chapter 9)
+    vec2 p = vec2(cos(spin) * uv.x + sin(spin) * uv.y, -sin(spin) * uv.x + cos(spin) * uv.y);
+
+    vec2 t = repeatAngle(p, 12.0);
+    float tooth = sdBox(t - vec2(0.64, 0.0), vec2(0.1, 0.055)) - 0.015;   // one rounded tooth
+    float body = length(p) - 0.62;
+    float d = min(body, tooth);
+
+    vec2 w = repeatAngle(p, 5.0);
+    float window = length(w - vec2(0.36, 0.0)) - 0.11;  // one window
+    d = max(d, -window);                               // cut it out
+    d = max(d, -(length(p) - 0.1));                    // and the axle hole
+
+    vec3 col = vec3(0.08, 0.09, 0.12);
+    col = mix(col, vec3(0.8, 0.65, 0.35), 1.0 - smoothstep(-px, px, d));
+    col *= 0.85 + 0.15 * smoothstep(-0.05, 0.0, d);    // a lighter rim just inside the edge
+
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn ex-more" type="button" data-label="Show all 35 lines">Show all 35 lines</button><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+float sdBox(vec2 p, vec2 b) {
+    vec2 q = abs(p) - b;
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0);
+}
+
+// Fold p into the first of n slices around the center.
+vec2 repeatAngle(vec2 p, float n) {
+    float sector = 6.28318 / n;
+    float a = mod(atan(p.y, p.x) + sector * 0.5, sector) - sector * 0.5;
+    return length(p) * vec2(cos(a), sin(a));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    float spin = iTime * 0.5;                          // turn the gear (Chapter 9)
+    vec2 p = vec2(cos(spin) * uv.x + sin(spin) * uv.y, -sin(spin) * uv.x + cos(spin) * uv.y);
+
+    vec2 t = repeatAngle(p, 12.0);
+    float tooth = sdBox(t - vec2(0.64, 0.0), vec2(0.1, 0.055)) - 0.015;   // one rounded tooth
+    float body = length(p) - 0.62;
+    float d = min(body, tooth);
+
+    vec2 w = repeatAngle(p, 5.0);
+    float window = length(w - vec2(0.36, 0.0)) - 0.11;  // one window
+    d = max(d, -window);                               // cut it out
+    d = max(d, -(length(p) - 0.1));                    // and the axle hole
+
+    vec3 col = vec3(0.08, 0.09, 0.12);
+    col = mix(col, vec3(0.8, 0.65, 0.35), 1.0 - smoothstep(-px, px, d));
+    col *= 0.85 + 0.15 * smoothstep(-0.05, 0.0, d);    // a lighter rim just inside the edge
+
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<aside class="box aha"><span class="box-t">// AHA</span><p>Repetition is folding space so that many places ask the same question: fract folds a grid, mod on the angle folds a circle, abs folds a mirror. Draw one thing and get many.</p></aside>
+
+<h2 id="kaleidoscope"><span class="sec-n">10.6</span>Kaleidoscopes</h2>
+<p>A real kaleidoscope is a tube with mirrors along its length: you see one small wedge of colored glass, reflected over and over. In shader terms that's angular repetition with a mirror in every slice: fold the angle into one slice with <code>mod</code>, then fold each slice down its middle with <code>abs</code>. Here the "glass" is a few drifting discs, and the mirrors turn them into a mandala:</p>
+<figure class="ex" id="ex-kaleido" data-ex="kaleido" data-label="Example 10.9" data-title="Mirrored slices: a kaleidoscope over drifting discs" data-cfg='{}'><figcaption><span class="ex-n">Example 10.9</span><span>Mirrored slices: a kaleidoscope over drifting discs</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>// The "colored glass": a few discs drifting around a small area right of the center.
+vec3 picture(vec2 p) {
+    vec3 col = vec3(0.04, 0.04, 0.07);
+    for (int i = 0; i &lt; 6; i++) {
+        float fi = float(i);
+        vec2 c = vec2(0.15 + 0.65 * (0.5 + 0.5 * sin(iTime * 0.37 + fi * 1.7)),
+                      0.22 * (0.5 + 0.5 * cos(iTime * 0.29 + fi * 2.3)));
+        float r = 0.06 + 0.04 * (0.5 + 0.5 * sin(fi * 3.1));
+        vec3 ink = 0.5 + 0.5 * cos(6.28318 * (fi * 0.15 + vec3(0.0, 0.33, 0.67)));
+        col = mix(col, ink, 1.0 - smoothstep(r, r + 0.01, length(p - c)));
+    }
+    return col;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+
+    float r = length(uv);
+    float a = atan(uv.y, uv.x);
+    float slice = 6.28318 / 8.0;              // 8 slices
+    a = mod(a, slice);                        // the angle within its slice: 0..slice
+    a = abs(a - slice * 0.5);                 // mirror each slice down its middle
+    vec2 p = r * vec2(cos(a), sin(a));        // back to x, y
+
+    vec3 col = picture(p);
+    // col = picture(uv);                     // compare: the glass without mirrors
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+// The "colored glass": a few discs drifting around a small area right of the center.
+vec3 picture(vec2 p) {
+    vec3 col = vec3(0.04, 0.04, 0.07);
+    for (int i = 0; i < 6; i++) {
+        float fi = float(i);
+        vec2 c = vec2(0.15 + 0.65 * (0.5 + 0.5 * sin(iTime * 0.37 + fi * 1.7)),
+                      0.22 * (0.5 + 0.5 * cos(iTime * 0.29 + fi * 2.3)));
+        float r = 0.06 + 0.04 * (0.5 + 0.5 * sin(fi * 3.1));
+        vec3 ink = 0.5 + 0.5 * cos(6.28318 * (fi * 0.15 + vec3(0.0, 0.33, 0.67)));
+        col = mix(col, ink, 1.0 - smoothstep(r, r + 0.01, length(p - c)));
+    }
+    return col;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+
+    float r = length(uv);
+    float a = atan(uv.y, uv.x);
+    float slice = 6.28318 / 8.0;              // 8 slices
+    a = mod(a, slice);                        // the angle within its slice: 0..slice
+    a = abs(a - slice * 0.5);                 // mirror each slice down its middle
+    vec2 p = r * vec2(cos(a), sin(a));        // back to x, y
+
+    vec3 col = picture(p);
+    // col = picture(uv);                     // compare: the glass without mirrors
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<p>Uncomment the last <code>col</code> line to see the plain picture: a handful of discs drifting around near the center. The kaleidoscope only ever looks at a thin wedge of it.</p>
+<p>Now combine folding with Chapter 9's rotation, and repeat. Fold with abs, shift, rotate, fold again: each pass reflects the previous result in new places, so the complexity multiplies while the code stays a few lines long. This one draws a single small ring:</p>
+<figure class="ex" id="ex-fold-loop" data-ex="fold-loop" data-label="Example 10.10" data-title="Fold, shift, turn, repeat: one ring becomes a mandala" data-cfg='{}'><figcaption><span class="ex-n">Example 10.10</span><span>Fold, shift, turn, repeat: one ring becomes a mandala</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>mat2 rot(float a) {                       // rot(a) * p turns p counterclockwise by a
+    float c = cos(a), s = sin(a);
+    return mat2(c, s, -s, c);
+}
+
+vec3 palette(float t) {
+    return 0.5 + 0.5 * cos(6.28318 * (t + vec3(0.0, 0.33, 0.67)));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    vec2 p = uv;
+
+    for (int i = 0; i &lt; 4; i++) {         // try 1, 2, 6
+        p = abs(p);                       // fold: mirror both axes
+        p -= 0.25;                        // shift, so the next fold reflects something new
+        p = rot(0.4 + iTime * 0.1) * p;   // turn, so the next fold lands somewhere new
+    }
+
+    float d = abs(length(p) - 0.15);      // the one small ring, everything else is reflections
+    vec3 col = palette(length(uv) * 0.6 - iTime * 0.1) * 0.005 / max(d, 0.0005);
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+mat2 rot(float a) {                       // rot(a) * p turns p counterclockwise by a
+    float c = cos(a), s = sin(a);
+    return mat2(c, s, -s, c);
+}
+
+vec3 palette(float t) {
+    return 0.5 + 0.5 * cos(6.28318 * (t + vec3(0.0, 0.33, 0.67)));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    vec2 p = uv;
+
+    for (int i = 0; i < 4; i++) {         // try 1, 2, 6
+        p = abs(p);                       // fold: mirror both axes
+        p -= 0.25;                        // shift, so the next fold reflects something new
+        p = rot(0.4 + iTime * 0.1) * p;   // turn, so the next fold lands somewhere new
+    }
+
+    float d = abs(length(p) - 0.15);      // the one small ring, everything else is reflections
+    vec3 col = palette(length(uv) * 0.6 - iTime * 0.1) * 0.005 / max(d, 0.0005);
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<p>Set the loop count to 1 and you can see the single ring, mirrored into four corners. Each extra pass folds that again. This family of patterns is called a <b>kaleidoscopic IFS</b> ("iterated function system"), and it scales up all the way to 3D fractals.</p>
+
+<h2 id="tunnel"><span class="sec-n">10.7</span>An infinite tunnel</h2>
+<p>One more polar trick, and it's a famous one from the 1990s demoscene. Use the angle and <em>one over the radius</em> as texture coordinates, and the flat screen turns into a tunnel you fly through:</p>
+<figure class="ex" id="ex-tunnel" data-ex="tunnel" data-label="Example 10.11" data-title="(angle, 1/r): flying down a tunnel" data-cfg='{}'><figcaption><span class="ex-n">Example 10.11</span><span>(angle, 1/r): flying down a tunnel</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+
+    float r = length(uv);
+    float a = atan(uv.y, uv.x);
+
+    float depth = 0.25 / r;                      // how far away this bit of wall is
+    vec2 t = vec2(a / 6.28318 * 16.0,            // 16 tiles around the tunnel (a whole number!)
+                  depth * 4.0 + iTime * 2.0);    // 4 tiles per unit of depth; time flies forward
+
+    float checker = mod(floor(t.x) + floor(t.y), 2.0);
+    vec3 col = mix(vec3(0.15, 0.25, 0.6), vec3(1.0, 0.6, 0.2), checker);
+    col *= exp(-0.35 * depth);                   // the farther away, the darker (fog)
+
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+
+    float r = length(uv);
+    float a = atan(uv.y, uv.x);
+
+    float depth = 0.25 / r;                      // how far away this bit of wall is
+    vec2 t = vec2(a / 6.28318 * 16.0,            // 16 tiles around the tunnel (a whole number!)
+                  depth * 4.0 + iTime * 2.0);    // 4 tiles per unit of depth; time flies forward
+
+    float checker = mod(floor(t.x) + floor(t.y), 2.0);
+    vec3 col = mix(vec3(0.15, 0.25, 0.6), vec3(1.0, 0.6, 0.2), checker);
+    col *= exp(-0.35 * depth);                   // the farther away, the darker (fog)
+
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<aside class="box math"><span class="box-t">Math from zero: why 1/r is depth</span>
+<p>Imagine standing inside a long pipe of radius R, looking straight down it. A ring of the pipe's wall at distance z in front of you appears on screen as a circle. How big? Perspective makes things look smaller in proportion to their distance: twice as far, half the size. So the ring appears with screen radius r = R / z.</p>
+<p>Turn that around: z = R / r. A pixel at screen radius r is looking at the bit of wall at depth R / r. That's the <code>0.25 / r</code> in the code (R = 0.25). Near the center, r is tiny and the depth is huge: the far end of the tunnel. The angle tells you where around the pipe you're looking. So (angle, depth) is the position on the pipe's wall, and a pattern drawn in those coordinates lands on the wall in perfect perspective. A 3D effect, without any 3D.</p>
+</aside>
+
+<section class="summary">
+<h2>What you now know</h2>
+<ul>
+<li><code>fract(p * n) - 0.5</code> gives every tile its own centered coordinates; one shape, infinite copies. Shapes can't cross into neighboring tiles.</li>
+<li><code>floor(p * n)</code> is the tile's id: use it for checkerboards (<code>mod(id.x + id.y, 2.0)</code>), offsets and per-tile variation.</li>
+<li><code>abs</code> is a mirror; <code>abs(p)</code> mirrors four ways.</li>
+<li>Polar: <code>r = length(p)</code>, <code>a = atan(p.y, p.x)</code> (−π..π), and back with <code>r * vec2(cos(a), sin(a))</code>. Repeat a whole number of times around, or the seam shows.</li>
+<li>Flowers wobble the radius with the angle; spirals mix angle and radius in one stripe.</li>
+<li>Angular repetition: <code>mod</code> the angle into one slice; add <code>abs</code> for mirrored slices, a kaleidoscope.</li>
+<li>Fold, shift, rotate, repeat multiplies complexity. <code>(angle, 1/r)</code> is a tunnel.</li>
+</ul>
+</section>
+
+<div class="try"><span class="box-t">Exercises</span>
+<p><b>1.</b> In <code>tiles</code>, rotate each circle into a small box that spins, with each tile spinning at a different speed based on its id.</p>
+<p><b>2.</b> Change <code>mirror</code> so it mirrors both ways (four blobs for every one).</p>
+<p><b>3.</b> Make the tunnel twist: add something like <code>0.3 * depth</code> to the angle before tiling.</p>
+<details><summary>Solution</summary><div><pre class="snip"><code>vec2 t = vec2((a + 0.3 * depth) / 6.28318 * 16.0, depth * 4.0 + iTime * 2.0);</code></pre></div></details>
+<p><b>4.</b> Give the gear a second, smaller gear that meshes with it (it must turn the opposite way, and slower or faster depending on its number of teeth).</p>
+</div>
+<p><b>Go deeper:</b> <a href="https://thebookofshaders.com/09/" target="_blank" rel="noopener">The Book of Shaders, chapter 9</a> on patterns, <a href="https://thebookofshaders.com/07/" target="_blank" rel="noopener">chapter 7</a> on polar shapes, and <a href="https://iquilezles.org/articles/sdfrepetition/" target="_blank" rel="noopener">Inigo Quilez on domain repetition</a>, including how to let shapes cross tile borders.</p>
+
+<nav class="ch-nav" aria-label="Chapters"><a href="09-moving-space.html"><small>← Chapter 9</small><b>Moving space: translate, rotate, scale</b></a><a class="next" href="11-randomness-and-noise.html"><small>Chapter 11 →</small><b>Randomness and noise</b></a></nav>
+</article>
+</div></div>
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="../assets/reference.js"></script><script src="../assets/engine.js"></script><script src="../assets/editor.js"></script><script src="../assets/widgets.js"></script><script src="../assets/site.js"></script>
+</body>
+</html>

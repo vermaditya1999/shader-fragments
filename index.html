@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Shader Fragments · learn GLSL shaders from first principles</title>
+<meta name="description" content="A course in GLSL shaders from first principles: every idea explained from zero, every example live.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="./assets/icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="./assets/style.css">
+
+</head>
+<body data-page="home" data-root=".">
+<header class="top"><div class="top-in">
+  <a class="logo" href="./index.html"><span class="logo-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="word">Shader Fragments</span></a>
+  <nav class="nav" aria-label="Main"><a href="./index.html#contents" aria-current="page">Contents</a><a href="./reference.html">Reference</a><a href="./playground.html">Playground</a></nav>
+</div></header>
+<main>
+<div class="wrap"><div class="home">
+<section class="hero">
+  <div>
+    <p class="eyebrow">// a course in GLSL shaders</p>
+    <h1>Shader Fragments</h1>
+    <p class="lede">Learn to make images, 3D worlds, simulations and music visuals out of math, starting from what a pixel is. Every idea is explained from zero, every example runs live, and every word in the code explains itself.</p>
+    <div class="actions"><a class="btn primary big" href="chapters/01-what-is-a-shader.html">Start with Chapter 1</a><a class="btn big" href="#contents">See all 20 chapters</a></div>
+  </div>
+  <div class="hero-stage"><canvas id="hero-canvas" aria-label="A live shader: the piece you build in Chapter 12"></canvas><span class="hero-cap">running live · you build this in Chapter 12</span></div>
+</section>
+<script type="text/x-glsl" id="hero-code">
+// After kishimisu's "An introduction to Shader Art Coding".
+
+vec3 palette(float t) {                                  // Chapter 6
+    vec3 a = vec3(0.5, 0.5, 0.5);
+    vec3 b = vec3(0.5, 0.5, 0.5);
+    vec3 c = vec3(1.0, 1.0, 1.0);
+    vec3 d = vec3(0.263, 0.416, 0.557);
+    return a + b * cos(6.28318 * (c * t + d));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;   // Chapter 3
+    vec2 uv0 = uv;                          // where this pixel started
+    vec3 finalColor = vec3(0.0);
+
+    for (float i = 0.0; i < 4.0; i++) {
+        uv = fract(uv * 1.5) - 0.5;         // repeat the space left by the last layer (Chapter 10)
+
+        float d = length(uv) * exp(-length(uv0));                 // distance, fading outward
+        vec3 col = palette(length(uv0) + i * 0.4 + iTime * 0.4);  // each layer a bit further along
+
+        d = sin(d * 8.0 + iTime) / 8.0;     // ripples (Chapter 5)
+        d = abs(d);
+        d = pow(0.01 / d, 1.2);             // glow, with extra contrast (Chapter 8)
+
+        finalColor += col * d;              // light adds up (Chapter 6)
+    }
+
+    fragColor = vec4(finalColor, 1.0);
+}
+</script>
+<section class="how" aria-label="How to use this site">
+  <div><b>Read on the left</b><span>Each chapter is one long page. Examples run live inside the text.</span></div>
+  <div><b>Play on the right</b><span>“Edit in workbench” loads any example into the editor next to the text.</span></div>
+  <div><b>Poke the numbers</b><span>Click a number in the code and drag the slider. Hover a word to see what it means.</span></div>
+  <div><b>Inspect any pixel</b><span>Hover the workbench canvas to read a pixel’s coordinates and color.</span></div>
+</section>
+<section id="contents" aria-labelledby="contents-h">
+  <div class="section-head"><div><p class="eyebrow">// the course</p><h2 id="contents-h">Contents</h2></div><a class="btn" href="reference.html">GLSL reference</a></div>
+  <section class="part"><div class="part-head"><h3>Part I · Foundations</h3><p>How a shader thinks, and all the math it needs, from zero.</p></div><div class="cards"><a class="card" href="chapters/01-what-is-a-shader.html"><div class="thumb"><img src="assets/thumbs/01.jpg" alt="" loading="lazy"></div><span class="n">Chapter 1</span><span class="t">What is a shader?</span><span class="s">Pixels, colors as numbers, the GPU, and the one function every pixel runs.</span></a><a class="card" href="chapters/02-the-language.html"><div class="thumb"><img src="assets/thumbs/02.jpg" alt="" loading="lazy"></div><span class="n">Chapter 2</span><span class="t">The language: numbers, vectors, functions</span><span class="s">Types, the 1.0 rule, vectors and swizzling, writing functions, if and for.</span></a><a class="card" href="chapters/03-coordinates.html"><div class="thumb"><img src="assets/thumbs/03.jpg" alt="" loading="lazy"></div><span class="n">Chapter 3</span><span class="t">Coordinates: where am I?</span><span class="s">fragCoord, iResolution, uv, aspect ratio, and the one line that starts almost every shader.</span></a><a class="card" href="chapters/04-shaping-functions.html"><div class="thumb"><img src="assets/thumbs/04.jpg" alt="" loading="lazy"></div><span class="n">Chapter 4</span><span class="t">Shaping functions: drawing with math</span><span class="s">Graphs, and the everyday toolbox: step, smoothstep, clamp, abs, floor, fract, mod and mix.</span></a><a class="card" href="chapters/05-waves-and-time.html"><div class="thumb"><img src="assets/thumbs/05.jpg" alt="" loading="lazy"></div><span class="n">Chapter 5</span><span class="t">Waves and time: sin, cos and animation</span><span class="s">Radians, the unit circle, amplitude, frequency and phase, and iTime: animation as a function of time.</span></a><a class="card" href="chapters/06-color.html"><div class="thumb"><img src="assets/thumbs/06.jpg" alt="" loading="lazy"></div><span class="n">Chapter 6</span><span class="t">Color: light, gradients and palettes</span><span class="s">Additive light, brightness, gradients, HSV, cosine palettes, gamma and tone mapping.</span></a><a class="card" href="chapters/07-vectors.html"><div class="thumb"><img src="assets/thumbs/07.jpg" alt="" loading="lazy"></div><span class="n">Chapter 7</span><span class="t">Vectors: arrows, distances and directions</span><span class="s">Points and arrows, adding and subtracting, Pythagoras and length, normalize, the dot product, and a lit ball from one line of math.</span></a><a class="card" href="chapters/08-shapes-from-distance.html"><div class="thumb"><img src="assets/thumbs/08.jpg" alt="" loading="lazy"></div><span class="n">Chapter 8</span><span class="t">Shapes from distance</span><span class="s">Signed distance functions: smooth edges, outlines and glows, a box and a segment derived from scratch, and shapes that melt together.</span></a><a class="card" href="chapters/09-moving-space.html"><div class="thumb"><img src="assets/thumbs/09.jpg" alt="" loading="lazy"></div><span class="n">Chapter 9</span><span class="t">Moving space: translate, rotate, scale</span><span class="s">Why you move coordinates instead of shapes, rotation derived from the unit circle, matrices as a shorthand, order of operations, and a 2D camera.</span></a><a class="card" href="chapters/10-repetition-and-polar.html"><div class="thumb"><img src="assets/thumbs/10.jpg" alt="" loading="lazy"></div><span class="n">Chapter 10</span><span class="t">Repetition, symmetry and polar coordinates</span><span class="s">Infinite copies with fract, tile ids with floor, mirrors with abs, polar coordinates from zero, gears, kaleidoscopes and a tunnel.</span></a><a class="card" href="chapters/11-randomness-and-noise.html"><div class="thumb"><img src="assets/thumbs/11.jpg" alt="" loading="lazy"></div><span class="n">Chapter 11</span><span class="t">Randomness and noise</span><span class="s">Hash functions explained, random tiles and mazes, value and gradient noise built from scratch, fBm, domain warping and Voronoi cells.</span></a></div></section><section class="part"><div class="part-head"><h3>Part II · Make things</h3><p>Generative art, 3D worlds, living simulations and music visuals.</p></div><div class="cards"><a class="card" href="chapters/12-composing-a-piece.html"><div class="thumb"><img src="assets/thumbs/12.jpg" alt="" loading="lazy"></div><span class="n">Chapter 12</span><span class="t">Composing a piece</span><span class="s">A famous recipe built step by step and dissected line by line, how to explore variations, finishing touches, seamless loops and exporting.</span></a><a class="card" href="chapters/13-raymarching.html"><div class="thumb"><img src="assets/thumbs/13.jpg" alt="" loading="lazy"></div><span class="n">Chapter 13</span><span class="t">3D from nothing: raymarching</span><span class="s">A camera made of rays, 3D distance functions, sphere tracing, surface normals from finite differences, and lighting from dot products.</span></a><a class="card" href="chapters/14-shadows-and-worlds.html"><div class="thumb"><img src="assets/thumbs/14.jpg" alt="" loading="lazy"></div><span class="n">Chapter 14</span><span class="t">3D, part 2: shadows, atmosphere and worlds</span><span class="s">Hard and soft shadows, ambient occlusion, fog, a look-at camera built from cross products, infinite repetition, twisting space and noise terrain.</span></a><a class="card" href="chapters/15-simulations.html"><div class="thumb"><img src="assets/thumbs/15.jpg" alt="" loading="lazy"></div><span class="n">Chapter 15</span><span class="t">Living simulations: memory and feedback</span><span class="s">Textures and texels, rendering into a buffer, ping-pong, feedback effects, the Game of Life, reaction-diffusion and flowing dye.</span></a><a class="card" href="chapters/16-sound.html"><div class="thumb"><img src="assets/thumbs/16.jpg" alt="" loading="lazy"></div><span class="n">Chapter 16</span><span class="t">Music-reactive visuals</span><span class="s">What sound is, sampling, waveform and spectrum, the Fourier transform as a dot product, the audio texture, bass and treble, a visualizer and a spectrogram.</span></a></div></section><section class="part"><div class="part-head"><h3>Part III · Under the hood</h3><p>How the GPU runs your code, a runner built from scratch, and debugging.</p></div><div class="cards"><a class="card" href="chapters/17-how-the-gpu-works.html"><div class="thumb"><img src="assets/thumbs/17.jpg" alt="" loading="lazy"></div><span class="n">Chapter 17</span><span class="t">How the GPU runs your shader</span><span class="s">CPU versus GPU, the graphics pipeline, the full-screen triangle, what the runner adds around mainImage, lockstep execution and divergence, floating point, NaN and what makes shaders slow.</span></a><a class="card" href="chapters/18-build-a-runner.html"><div class="thumb"><img src="assets/thumbs/18.jpg" alt="" loading="lazy"></div><span class="n">Chapter 18</span><span class="t">Build your own runner</span><span class="s">A complete shader runner in about 100 lines of plain JavaScript and WebGL2, step by step, and what the course's workbench adds on top.</span></a><a class="card" href="chapters/19-debugging.html"><div class="thumb"><img src="assets/thumbs/19.jpg" alt="" loading="lazy"></div><span class="n">Chapter 19</span><span class="t">Debugging shaders</span><span class="s">Reading compile errors, turning values into colors, a debug-view helper, the pixel inspector, isolating problems, hunting NaN, a field guide to common bugs, and three bugs to fix.</span></a></div></section><section class="part"><div class="part-head"><h3>Part IV · Share it</h3><p>Shadertoy, p5.js, Genuary and where to go next.</p></div><div class="cards"><a class="card" href="chapters/20-share-it.html"><div class="thumb"><img src="assets/thumbs/20.jpg" alt="" loading="lazy"></div><span class="n">Chapter 20</span><span class="t">Share it, and where to go next</span><span class="s">Shadertoy step by step, how the p5.js bridge works, shaders as filters over your drawings, Genuary, the shader community, your toolkit and paths onward.</span></a></div></section>
+</section>
+<section aria-labelledby="shelf-h">
+  <div class="section-head"><div><p class="eyebrow">// the wider world</p><h2 id="shelf-h">The shelf</h2></div></div>
+  <div class="links">
+    <a href="https://thebookofshaders.com/" target="_blank" rel="noopener"><b>The Book of Shaders</b><span>The classic free book by Patricio Gonzalez Vivo and Jen Lowe.</span></a>
+    <a href="https://iquilezles.org/articles/" target="_blank" rel="noopener"><b>Inigo Quilez: articles</b><span>Distance functions, noise, lighting. The reference shelf.</span></a>
+    <a href="https://www.shadertoy.com/" target="_blank" rel="noopener"><b>Shadertoy</b><span>Where shader people share. Every example here runs there unchanged.</span></a>
+    <a href="https://www.youtube.com/watch?v=f4s1h2YETNY" target="_blank" rel="noopener"><b>kishimisu: Intro to Shader Art Coding</b><span>Twenty minutes; pairs with Chapter 12.</span></a>
+    <a href="https://graphtoy.com/" target="_blank" rel="noopener"><b>Graphtoy</b><span>See the shape of any function.</span></a>
+    <a href="https://genuary.art/" target="_blank" rel="noopener"><b>Genuary</b><span>31 prompts for code art every January.</span></a>
+  </div>
+</section>
+<footer class="site-foot"><span>A static site: nothing you do here is stored or sent anywhere.</span><span>Code examples follow Shadertoy’s conventions.</span></footer>
+</div></div>
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="./assets/reference.js"></script><script src="./assets/engine.js"></script><script src="./assets/editor.js"></script><script src="./assets/widgets.js"></script><script src="./assets/site.js"></script>
+</body>
+</html>

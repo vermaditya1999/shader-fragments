@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>18. Build your own runner · Shader Fragments</title>
+<meta name="description" content="A complete shader runner in about 100 lines of plain JavaScript and WebGL2, step by step, and what the course&#x27;s workbench adds on top.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="../assets/icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+
+</head>
+<body data-page="chapter" data-root="..">
+<header class="top"><div class="top-in">
+  <a class="logo" href="../index.html"><span class="logo-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="word">Shader Fragments</span></a>
+  <nav class="nav" aria-label="Main"><a href="../index.html#contents">Contents</a><a href="../reference.html">Reference</a><a href="../playground.html">Playground</a></nav>
+</div></header>
+<main>
+<div class="wrap"><div class="chapter">
+<header class="ch-head">
+  <p class="eyebrow"><b>Part III · Under the hood</b> · Chapter 18</p>
+  <h1>Build your own runner</h1>
+  <p class="lede">Shadertoy, the workbench on this site and p5.js's shader mode all do the same job: get a fragment shader onto the GPU and call it for every pixel. In this chapter you'll write that program yourself, in one HTML file with no libraries, and understand every line. Then your shaders can live anywhere: a portfolio page, a gift, a screensaver.</p>
+  <details class="ch-toc" open><summary>In this chapter</summary><ol><li><a href="#plan">The plan</a></li><li><a href="#page">Step 1: a page and a context</a></li><li><a href="#shaders">Step 2: the two shaders</a></li><li><a href="#compile">Step 3: compile and link</a></li><li><a href="#triangle">Step 4: send the triangle</a></li><li><a href="#loop">Step 5: uniforms and the frame loop</a></li><li><a href="#mouse">Step 6: the mouse</a></li><li><a href="#complete">The whole runner</a></li><li><a href="#workbench">What the workbench adds</a></li></ol></details>
+</header>
+<aside class="stage" id="workbench" data-start="test-card" aria-label="Workbench: live shader and code"></aside>
+<article class="ch-body">
+
+
+
+<h2 id="plan"><span class="sec-n">18.1</span>The plan</h2>
+<p>Chapter 17 described what has to happen. As a checklist:</p>
+<ol>
+<li>Make a canvas and get a <b>WebGL2 context</b> from it, the connection to the GPU.</li>
+<li>Write the two shaders: the tiny vertex shader for the full-screen triangle, and your fragment shader glued between a header and a real <code>main()</code>.</li>
+<li><b>Compile</b> both and <b>link</b> them into a program, reporting errors.</li>
+<li>Upload the triangle's three corners and tell the GPU how to read them.</li>
+<li>Every frame: size the canvas, set the uniforms, draw.</li>
+</ol>
+<p>WebGL has a reputation for being verbose, and it is, but it's not deep. Most of the code is "create a thing, bind it, set it up", and the same few patterns repeat.</p>
+
+<h2 id="page"><span class="sec-n">18.2</span>Step 1: a page and a context</h2>
+<p>The HTML is a full-window canvas, a box for error messages, and the shader itself stored in a <code>&lt;script&gt;</code> tag. A script tag with a made-up type like <code>x-shader/x-fragment</code> is ignored by the browser, which makes it a handy place to keep text that JavaScript reads later:</p>
+<pre class="snip js"><code>&lt;canvas id="canvas"&gt;&lt;/canvas&gt;
+&lt;pre id="error" hidden&gt;&lt;/pre&gt;
+
+&lt;script id="shader" type="x-shader/x-fragment"&gt;
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    vec3 col = 0.5 + 0.5 * cos(iTime + uv.xyx + vec3(0.0, 2.0, 4.0));
+    fragColor = vec4(col, 1.0);
+}
+&lt;/script&gt;</code></pre>
+<p>Then the JavaScript asks the canvas for a WebGL2 context. Think of the context as a remote control for the GPU: every WebGL call is a button on it.</p>
+<pre class="snip js"><code>const canvas = document.getElementById('canvas');
+const gl = canvas.getContext('webgl2');
+if (!gl) throw new Error('WebGL2 is not available in this browser.');</code></pre>
+
+<h2 id="shaders"><span class="sec-n">18.3</span>Step 2: the two shaders</h2>
+<p>The vertex shader is the one from Chapter 17. The fragment shader is your code with Shadertoy-style glue around it: a header declaring the uniforms and the output, and a footer with the real <code>main()</code> that calls <code>mainImage</code> with the pixel's coordinates:</p>
+<pre class="snip js"><code>const vertexSource = `#version 300 es
+in vec2 aPos;
+void main() { gl_Position = vec4(aPos, 0.0, 1.0); }`;
+
+const header = `#version 300 es
+precision highp float;
+uniform vec3 iResolution;
+uniform float iTime;
+uniform vec4 iMouse;
+out vec4 outColor;
+`;
+const footer = `
+void main() { mainImage(outColor, gl_FragCoord.xy); }`;
+
+const code = document.getElementById('shader').textContent.replace(/^\n/, '');
+const fragmentSource = header + code + footer;</code></pre>
+<p>Two details that bite people. <code>#version 300 es</code> must be the very first characters of the source, with nothing before it, not even a blank line, which is why the template strings start right after the backtick. And this runner only provides three uniforms; a shader that uses <code>iFrame</code> or <code>iChannel0</code> will fail with "undeclared identifier" until you add them (an exercise below).</p>
+
+<h2 id="compile"><span class="sec-n">18.4</span>Step 3: compile and link</h2>
+<p>GPU drivers compile GLSL into the GPU's own machine code, right there in the browser. Each shader is compiled separately, then the two are <b>linked</b> into a <b>program</b>, which checks that what the vertex shader outputs matches what the fragment shader expects:</p>
+<pre class="snip js"><code>const headerLines = header.split('\n').length - 1;      // 6: used to fix error line numbers
+
+function compile(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+    const log = gl.getShaderInfoLog(shader)               // e.g. "ERROR: 0:9: 'x' : undeclared identifier"
+      .replace(/ERROR: 0:(\d+)/g, (m, n) =&gt; 'ERROR: line ' + (n - headerLines));
+    const box = document.getElementById('error');
+    box.textContent = log;
+    box.hidden = false;
+    throw new Error('The shader did not compile.');
+  }
+  return shader;
+}
+
+const program = gl.createProgram();
+gl.attachShader(program, compile(gl.VERTEX_SHADER, vertexSource));
+gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragmentSource));
+gl.linkProgram(program);
+gl.useProgram(program);</code></pre>
+<p>The error log counts lines from the top of the <em>whole</em> source, header included. Your code starts after the 6 header lines, so subtracting 6 turns the driver's line numbers into yours. Every runner does this; it's why the workbench's error messages point at the right line.</p>
+
+<h2 id="triangle"><span class="sec-n">18.5</span>Step 4: send the triangle</h2>
+<p>The three corners have to travel from JavaScript's memory to the GPU's. That takes a <b>buffer</b>: a block of GPU memory. Then the GPU needs to know how to read it: "the attribute <code>aPos</code> comes from this buffer, 2 floats per corner":</p>
+<pre class="snip js"><code>const buffer = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buffer);                    // "the buffer I'm talking about now is this one"
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+
+const aPos = gl.getAttribLocation(program, 'aPos');        // where does the program expect aPos?
+gl.enableVertexAttribArray(aPos);
+gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);    // 2 floats per corner, from the bound buffer</code></pre>
+<p>Notice the pattern: <code>bindBuffer</code> first, then calls that act on "the currently bound buffer". WebGL is a <b>state machine</b>: you select a thing, then operate on whatever is selected. Nearly every confusing WebGL bug is something being bound when you didn't expect it, or not bound when you did.</p>
+
+<h2 id="loop"><span class="sec-n">18.6</span>Step 5: uniforms and the frame loop</h2>
+<p>Uniforms are set by location, which you look up once by name. Then every frame: make the canvas's pixel count match its size on screen, tell WebGL the drawing area (<code>viewport</code>), set the uniforms, and draw 3 vertices as one triangle. <code>requestAnimationFrame</code> asks the browser to call the function again before the next screen refresh, usually 60 times a second, and passes the time in milliseconds:</p>
+<pre class="snip js"><code>const uResolution = gl.getUniformLocation(program, 'iResolution');
+const uTime = gl.getUniformLocation(program, 'iTime');
+const uMouse = gl.getUniformLocation(program, 'iMouse');
+
+function frame(ms) {
+  // A canvas has two sizes: how big it looks (CSS pixels) and how many pixels it holds.
+  // Sharp screens have 2 or more real pixels per CSS pixel, so ask for that many.
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  gl.viewport(0, 0, w, h);
+
+  gl.uniform3f(uResolution, w, h, 1);
+  gl.uniform1f(uTime, ms / 1000);
+  gl.uniform4f(uMouse, mouse[0], mouse[1], mouse[2], mouse[3]);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);       // draw! the fragment shader runs on every pixel
+
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);</code></pre>
+<p>The <code>Math.min(…, 2)</code> caps the density at 2: on a phone with 3 real pixels per CSS pixel, rendering at full density would mean 2.25 times as many pixels as at 2, for a difference you can barely see.</p>
+
+<h2 id="mouse"><span class="sec-n">18.7</span>Step 6: the mouse</h2>
+<p>Browsers measure the pointer in CSS pixels from the top-left. Shaders want canvas pixels from the bottom-left, like <code>fragCoord</code>. So scale by the canvas's density and flip y. Shadertoy's <code>iMouse</code> has four numbers: xy is the position while the button is held, zw is where the click started, and z and w turn negative when the button is released:</p>
+<pre class="snip js"><code>let mouse = [0, 0, 0, 0];
+function pointerPos(e) {
+  const r = canvas.getBoundingClientRect();
+  return [(e.clientX - r.left) * canvas.width / r.width,     // scale CSS pixels to canvas pixels
+          (r.bottom - e.clientY) * canvas.height / r.height]; // and measure y from the bottom
+}
+canvas.addEventListener('pointerdown', e =&gt; { const p = pointerPos(e); mouse = [p[0], p[1], p[0], p[1]]; });
+canvas.addEventListener('pointermove', e =&gt; {
+  if (e.buttons &amp; 1) { const p = pointerPos(e); mouse[0] = p[0]; mouse[1] = p[1]; }
+});
+window.addEventListener('pointerup', () =&gt; { mouse[2] = -Math.abs(mouse[2]); mouse[3] = -Math.abs(mouse[3]); });</code></pre>
+
+<h2 id="complete"><span class="sec-n">18.8</span>The whole runner</h2>
+<p>Here's everything assembled into one file. Download it, open it in a browser, and you'll see Shadertoy's default colors flowing. Then replace the shader in the <code>&lt;script id="shader"&gt;</code> tag with anything from this course that only uses iResolution, iTime and iMouse, and refresh.</p>
+<div class="file-block"><div class="file-bar"><span class="file-name">runner.html</span><span class="grow"></span><a class="sbtn" href="../files/runner.html" target="_blank" rel="noopener">Open in a new tab</a><a class="sbtn hot" href="../files/runner.html" download>Download</a></div><pre class="snip js file"><code>&lt;!doctype html&gt;
+&lt;html lang="en"&gt;
+&lt;head&gt;
+&lt;meta charset="utf-8"&gt;
+&lt;meta name="viewport" content="width=device-width, initial-scale=1"&gt;
+&lt;title&gt;My shader&lt;/title&gt;
+&lt;style&gt;
+  html, body { margin: 0; height: 100%; background: #000; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+  #error { position: fixed; left: 0; right: 0; bottom: 0; margin: 0; padding: 10px 14px;
+           background: #5a1020; color: #fff; font: 13px/1.5 monospace; white-space: pre-wrap; }
+&lt;/style&gt;
+&lt;/head&gt;
+&lt;body&gt;
+&lt;canvas id="canvas"&gt;&lt;/canvas&gt;
+&lt;pre id="error" hidden&gt;&lt;/pre&gt;
+
+&lt;!-- Your shader: written exactly as on Shadertoy or in the course. --&gt;
+&lt;script id="shader" type="x-shader/x-fragment"&gt;
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    vec3 col = 0.5 + 0.5 * cos(iTime + uv.xyx + vec3(0.0, 2.0, 4.0));
+    fragColor = vec4(col, 1.0);
+}
+&lt;/script&gt;
+
+&lt;script&gt;
+// 1. A WebGL2 context: our connection to the GPU.
+const canvas = document.getElementById('canvas');
+const gl = canvas.getContext('webgl2');
+if (!gl) throw new Error('WebGL2 is not available in this browser.');
+
+// 2. Two shaders. The vertex shader places the corners of one big triangle.
+const vertexSource = `#version 300 es
+in vec2 aPos;
+void main() { gl_Position = vec4(aPos, 0.0, 1.0); }`;
+
+// The fragment shader is your code, glued between a header and a real main().
+const header = `#version 300 es
+precision highp float;
+uniform vec3 iResolution;
+uniform float iTime;
+uniform vec4 iMouse;
+out vec4 outColor;
+`;
+const footer = `
+void main() { mainImage(outColor, gl_FragCoord.xy); }`;
+const code = document.getElementById('shader').textContent.replace(/^\n/, '');   // drop the first empty line
+const fragmentSource = header + code + footer;
+const headerLines = header.split('\n').length - 1;   // to fix up error line numbers
+
+// 3. Compile both shaders and link them into one program.
+function compile(type, source) {
+  const shader = gl.createShader(type);
+  gl.shaderSource(shader, source);
+  gl.compileShader(shader);
+  if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+    const log = gl.getShaderInfoLog(shader)
+      .replace(/ERROR: 0:(\d+)/g, (m, n) =&gt; 'ERROR: line ' + (n - headerLines));
+    const box = document.getElementById('error');
+    box.textContent = log;
+    box.hidden = false;
+    throw new Error('The shader did not compile.');
+  }
+  return shader;
+}
+const program = gl.createProgram();
+gl.attachShader(program, compile(gl.VERTEX_SHADER, vertexSource));
+gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragmentSource));
+gl.linkProgram(program);
+gl.useProgram(program);
+
+// 4. The triangle: three corners in clip space, uploaded to the GPU once.
+const buffer = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+const aPos = gl.getAttribLocation(program, 'aPos');
+gl.enableVertexAttribArray(aPos);
+gl.vertexAttribPointer(aPos, 2, gl.FLOAT, false, 0, 0);   // 2 floats per corner
+
+// 5. Where each uniform lives in the program.
+const uResolution = gl.getUniformLocation(program, 'iResolution');
+const uTime = gl.getUniformLocation(program, 'iTime');
+const uMouse = gl.getUniformLocation(program, 'iMouse');
+
+// 6. The mouse, in canvas pixels, with y pointing up like fragCoord.
+let mouse = [0, 0, 0, 0];
+function pointerPos(e) {
+  const r = canvas.getBoundingClientRect();
+  return [(e.clientX - r.left) * canvas.width / r.width,
+          (r.bottom - e.clientY) * canvas.height / r.height];
+}
+canvas.addEventListener('pointerdown', e =&gt; { const p = pointerPos(e); mouse = [p[0], p[1], p[0], p[1]]; });
+canvas.addEventListener('pointermove', e =&gt; {
+  if (e.buttons &amp; 1) { const p = pointerPos(e); mouse[0] = p[0]; mouse[1] = p[1]; }
+});
+window.addEventListener('pointerup', () =&gt; { mouse[2] = -Math.abs(mouse[2]); mouse[3] = -Math.abs(mouse[3]); });
+
+// 7. Draw, every frame.
+function frame(ms) {
+  // Make the canvas hold as many pixels as it covers on screen (up to 2x for sharp screens).
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  gl.viewport(0, 0, w, h);
+
+  gl.uniform3f(uResolution, w, h, 1);
+  gl.uniform1f(uTime, ms / 1000);
+  gl.uniform4f(uMouse, mouse[0], mouse[1], mouse[2], mouse[3]);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);   // one triangle: the fragment shader runs on every pixel
+
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+&lt;/script&gt;
+&lt;/body&gt;
+&lt;/html&gt;</code></pre></div>
+<p>A good first test is this card, which checks all three uniforms at once: the colors flow if iTime works, the circle is round and the squares square if iResolution works, and the dark dot follows your pointer while you drag if iMouse works.</p>
+<figure class="ex" id="ex-test-card" data-ex="test-card" data-label="Example 18.1" data-title="A test card for a home-made runner" data-cfg='{}'><figcaption><span class="ex-n">Example 18.1</span><span>A test card for a home-made runner</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>// Uses exactly the three uniforms the runner provides.
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    vec2 m = (iMouse.xy * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    vec3 col = 0.5 + 0.5 * cos(iTime + uv.xyx + vec3(0.0, 2.0, 4.0));   // iTime: the colors flow
+    vec2 g = abs(fract(uv * 2.0 + 0.5) - 0.5);                         // iResolution: squares stay square
+    col *= 0.85 + 0.15 * smoothstep(0.0, 2.0 * px, min(g.x, g.y));
+    float ring = abs(length(uv) - 0.8) - 0.004;                         // ...and circles stay round
+    col = mix(col, vec3(1.0), 1.0 - smoothstep(0.0, px, ring));
+    float cursor = length(uv - m) - 0.06;                               // iMouse: a dot under the pointer
+    col = mix(col, vec3(0.05), 1.0 - smoothstep(-px, px, cursor));
+
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+// Uses exactly the three uniforms the runner provides.
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    vec2 m = (iMouse.xy * 2.0 - iResolution.xy) / iResolution.y;
+    float px = 2.0 / iResolution.y;
+
+    vec3 col = 0.5 + 0.5 * cos(iTime + uv.xyx + vec3(0.0, 2.0, 4.0));   // iTime: the colors flow
+    vec2 g = abs(fract(uv * 2.0 + 0.5) - 0.5);                         // iResolution: squares stay square
+    col *= 0.85 + 0.15 * smoothstep(0.0, 2.0 * px, min(g.x, g.y));
+    float ring = abs(length(uv) - 0.8) - 0.004;                         // ...and circles stay round
+    col = mix(col, vec3(1.0), 1.0 - smoothstep(0.0, px, ring));
+    float cursor = length(uv - m) - 0.06;                               // iMouse: a dot under the pointer
+    col = mix(col, vec3(0.05), 1.0 - smoothstep(-px, px, cursor));
+
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<aside class="box note"><span class="box-t">Opening it from your computer</span><p>Because the shader lives inside the HTML file, the runner works straight from your disk: double-click it, no server needed. Loading images as textures is different: browsers block a page opened from disk from reading other files, so for textures you'd serve the folder with a tiny local web server (for example <code>python3 -m http.server</code> in that folder) or put it online, for example on GitHub Pages.</p></aside>
+<aside class="box aha"><span class="box-t">// AHA</span><p>A shader runner is about 100 lines: a context, two compiled shaders, one triangle, three uniforms and a loop. Every shader tool on the web is this, plus conveniences.</p></aside>
+
+<h2 id="workbench"><span class="sec-n">18.9</span>What the workbench adds</h2>
+<p>The workbench on this site is the same skeleton with more conveniences. Its source is in <code>assets/engine.js</code> (about 600 commented lines), and now you can read it. Its main additions:</p>
+<ul>
+<li><b>Buffers</b> (Chapter 15): two textures attached to <b>framebuffer</b> objects, drawn into with <code>gl.bindFramebuffer</code> and swapped every frame, using floating-point textures where the device supports them.</li>
+<li><b>Sound</b> (Chapter 16): a Web Audio <code>AnalyserNode</code> fills a 512 × 2 array each frame, uploaded into a texture with <code>gl.texSubImage2D</code>.</li>
+<li><b>Many previews, one context.</b> Browsers allow only a limited number of WebGL contexts per page (often 16), and a chapter has more examples than that. So all inline previews share one hidden canvas: each is rendered there in turn and copied into its own visible 2D canvas.</li>
+<li><b>Friendly errors</b>: the driver's message, matched against common patterns and explained in plain words.</li>
+<li><b>The pixel inspector</b>: <code>gl.readPixels</code> reads back the color under the pointer after a frame is drawn.</li>
+<li><b>Exports</b>: <code>canvas.toBlob</code> for PNGs, and <code>canvas.captureStream</code> with a <code>MediaRecorder</code> for video clips.</li>
+<li><b>Adaptive resolution</b>: if frames take too long, it renders fewer pixels (Chapter 17).</li>
+</ul>
+
+<section class="summary">
+<h2>What you now know</h2>
+<ul>
+<li>A WebGL2 context is a remote control for the GPU; WebGL is a state machine of "bind, then act".</li>
+<li>A runner compiles a vertex shader and your glued fragment shader, links them into a program, and reports errors with corrected line numbers.</li>
+<li>The triangle's corners go into a buffer; an attribute pointer says how to read them.</li>
+<li>Each frame: match the canvas's pixel size to the screen, set the viewport and uniforms, draw 3 vertices.</li>
+<li>Mouse coordinates need scaling to canvas pixels and flipping to bottom-up.</li>
+</ul>
+</section>
+
+<div class="try"><span class="box-t">Exercises</span>
+<p><b>1.</b> Add <code>iFrame</code> to your runner: declare it in the header, count frames in JavaScript, and set it with <code>gl.uniform1i</code>.</p>
+<p><b>2.</b> Add a pause: pressing the space bar should freeze time, and pressing it again should continue from the same moment (keep your own clock instead of using <code>ms</code> directly).</p>
+<p><b>3.</b> Load an image into <code>iChannel0</code>. You'll need <code>gl.createTexture</code>, <code>gl.texImage2D</code> with an <code>Image</code> object once it has loaded, <code>gl.texParameteri</code> for filtering, and <code>gl.uniform1i</code> to tell the sampler which texture unit to use. (Serve the folder with a local web server, as the note above explains.)</p>
+<p><b>4.</b> The big one: add a Buffer A pass with ping-pong textures, so Chapter 15's examples run in your runner. Read how <code>_makeTargets</code> and <code>render</code> in <code>assets/engine.js</code> do it.</p>
+</div>
+<p><b>Go deeper:</b> <a href="https://webgl2fundamentals.org/" target="_blank" rel="noopener">WebGL2 Fundamentals</a>, the best step-by-step WebGL tutorial, and <a href="https://developer.mozilla.org/en-US/docs/Web/API/WebGL_API/Tutorial" target="_blank" rel="noopener">MDN's WebGL tutorial</a>.</p>
+
+<nav class="ch-nav" aria-label="Chapters"><a href="17-how-the-gpu-works.html"><small>← Chapter 17</small><b>How the GPU runs your shader</b></a><a class="next" href="19-debugging.html"><small>Chapter 19 →</small><b>Debugging shaders</b></a></nav>
+</article>
+</div></div>
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="../assets/reference.js"></script><script src="../assets/engine.js"></script><script src="../assets/editor.js"></script><script src="../assets/widgets.js"></script><script src="../assets/site.js"></script>
+</body>
+</html>

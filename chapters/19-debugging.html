@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>19. Debugging shaders · Shader Fragments</title>
+<meta name="description" content="Reading compile errors, turning values into colors, a debug-view helper, the pixel inspector, isolating problems, hunting NaN, a field guide to common bugs, and three bugs to fix.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="../assets/icon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&family=Bricolage+Grotesque:opsz,wght@12..96,500..800&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="../assets/style.css">
+
+</head>
+<body data-page="chapter" data-root="..">
+<header class="top"><div class="top-in">
+  <a class="logo" href="../index.html"><span class="logo-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="word">Shader Fragments</span></a>
+  <nav class="nav" aria-label="Main"><a href="../index.html#contents">Contents</a><a href="../reference.html">Reference</a><a href="../playground.html">Playground</a></nav>
+</div></header>
+<main>
+<div class="wrap"><div class="chapter">
+<header class="ch-head">
+  <p class="eyebrow"><b>Part III · Under the hood</b> · Chapter 19</p>
+  <h1>Debugging shaders</h1>
+  <p class="lede">A shader has no <code>console.log</code>, no breakpoints and no way to print a number. When something goes wrong, you get either a compile error or a picture that's wrong in some way. This chapter turns that around: the picture <em>is</em> your debugger, once you know how to make it show you what's going on.</p>
+  <details class="ch-toc" open><summary>In this chapter</summary><ol><li><a href="#errors">Reading compile errors</a></li><li><a href="#visualize">Make the invisible visible</a></li><li><a href="#inspector">Reading exact values: the pixel inspector</a></li><li><a href="#isolate">Divide and conquer</a></li><li><a href="#nan">Hunting NaN and infinity</a></li><li><a href="#field-guide">A field guide to common bugs</a></li><li><a href="#fix">Three bugs to fix</a></li><li><a href="#slow">When it's slow</a></li></ol></details>
+</header>
+<aside class="stage" id="workbench" data-start="debug-view" aria-label="Workbench: live shader and code"></aside>
+<article class="ch-body">
+
+
+
+<h2 id="errors"><span class="sec-n">19.1</span>Reading compile errors</h2>
+<p>When code doesn't compile, the GPU driver says why, in a terse format. In the workbench the red bar under the editor shows the message, highlights the line, and adds a plain-words explanation. A raw message looks like this:</p>
+<div class="formula">ERROR: 0:12: 'radius' : undeclared identifier</div>
+<p>Read it as: "error, in source 0, on line 12: the word <code>radius</code>: it hasn't been declared". Three parts: where, which word, what's wrong. Most errors you'll meet are one of a handful:</p>
+<div class="table-wrap"><table>
+<tr><th>Message contains</th><th>Usually means</th></tr>
+<tr><td>undeclared identifier</td><td>A typo, wrong capitalization (GLSL is case-sensitive), or using a variable before or outside the block where it's declared.</td></tr>
+<tr><td>cannot convert from 'const int' to 'float'</td><td>You wrote <code>1</code> where GLSL needs <code>1.0</code> (Chapter 2). The most common error of all.</td></tr>
+<tr><td>no matching overloaded function</td><td>A built-in got the wrong kinds of values: <code>mix(vec3, float, float)</code>, or <code>length()</code> of nothing.</td></tr>
+<tr><td>syntax error</td><td>Punctuation: a missing <code>;</code> or bracket. Often reported on the line <em>after</em> the real mistake, because that's where the compiler noticed.</td></tr>
+<tr><td>reserved word, illegal use of reserved word</td><td>You named a variable <code>smooth</code>, <code>sample</code>, <code>input</code>, <code>output</code>, <code>filter</code> or <code>half</code>.</td></tr>
+<tr><td>redefinition</td><td>Declaring the same name twice in one block: drop the type the second time.</td></tr>
+<tr><td>l-value required, can't modify</td><td>Assigning to something read-only: a uniform like <code>iTime</code>, or an <code>in</code> parameter.</td></tr>
+<tr><td>not enough data provided for construction</td><td>A constructor with the wrong number of values, like <code>vec3(1.0, 2.0)</code>.</td></tr>
+</table></div>
+<p>Fix the <b>first</b> error first. One mistake, like a missing bracket, can confuse the compiler into reporting several errors further down that aren't real. Here's a practice shader with four separate mistakes. Copy it, paste it into the workbench, and fix them one at a time, reading each message:</p>
+<pre class="snip"><code>void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy
+    float smooth = uv.x * 2;
+    vec3 col = vec3(uv, smooth;
+    fragColor = vec4(col, 1.0);
+}</code></pre>
+
+<h2 id="visualize"><span class="sec-n">19.2</span>Make the invisible visible</h2>
+<p>When code compiles but the picture is wrong, something in the middle has a value you didn't expect. You can't print it, but you can <em>draw</em> it: put the value into the output color and look. Since every pixel draws its own value, you see the whole field of values at once, which is often more useful than one printed number would be.</p>
+<p>The basic moves:</p>
+<ul>
+<li><b>A float as grey</b>: <code>fragColor = vec4(vec3(v), 1.0);</code> Only 0 to 1 is visible: everything below 0 looks black and everything above 1 looks white, so you can't tell 1.0 from 500.0.</li>
+<li><b>Positive and negative</b>: <code>vec3(max(v, 0.0), 0.0, max(-v, 0.0))</code> shows positive values in red and negative ones in blue. Perfect for signed distances.</li>
+<li><b>Directions</b>: <code>n * 0.5 + 0.5</code> maps −1..1 to 0..1, as in Chapter 13's normals view.</li>
+<li><b>Contours</b>: <code>fract(v * 10.0)</code> draws a band every 0.1, revealing the shape of a field and how fast it changes, as in Chapter 8's field view.</li>
+<li><b>Freeze time</b>: replace <code>iTime</code> with a constant, so you can study one moment.</li>
+</ul>
+<p>Combining these into a reusable helper is worth it. This one shows 0..1 as grey with bands every 0.1, values below 0 in blue, values above 1 in orange, infinities in yellow and NaN in flashing magenta, so nothing hides:</p>
+<figure class="ex" id="ex-debug-view" data-ex="debug-view" data-label="Example 19.1" data-title="A debug view: every range gets its own look" data-cfg='{}'><figcaption><span class="ex-n">Example 19.1</span><span>A debug view: every range gets its own look</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>// Show any float as a color, so nothing is hidden:
+//   0..1     grey, with a band every 0.1 so you can count
+//   below 0  blue          above 1  orange
+//   infinity yellow        NaN      flashing magenta
+vec3 debugValue(float v) {
+    if (isnan(v)) return vec3(1.0, 0.0, 1.0) * step(0.5, fract(iTime * 2.0));
+    if (isinf(v)) return vec3(1.0, 1.0, 0.0);
+    if (v &lt; 0.0) return vec3(0.1, 0.3, 1.0) * (0.45 + 0.55 * fract(-v));
+    if (v &gt; 1.0) return vec3(1.0, 0.45, 0.1) * (0.45 + 0.55 * fract(v));
+    return vec3(v) * (0.88 + 0.12 * step(0.5, fract(v * 10.0)));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+
+    // the value under investigation: a wave that goes out of range...
+    float v = 1.5 * sin(uv.x * 2.0 + iTime) * uv.y + 0.5;
+    // ...and, on the right, square roots: of negative numbers below the middle, so NaN
+    if (uv.x &gt; 1.2) v = sqrt(uv.y);
+
+    fragColor = vec4(debugValue(v), 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+// Show any float as a color, so nothing is hidden:
+//   0..1     grey, with a band every 0.1 so you can count
+//   below 0  blue          above 1  orange
+//   infinity yellow        NaN      flashing magenta
+vec3 debugValue(float v) {
+    if (isnan(v)) return vec3(1.0, 0.0, 1.0) * step(0.5, fract(iTime * 2.0));
+    if (isinf(v)) return vec3(1.0, 1.0, 0.0);
+    if (v < 0.0) return vec3(0.1, 0.3, 1.0) * (0.45 + 0.55 * fract(-v));
+    if (v > 1.0) return vec3(1.0, 0.45, 0.1) * (0.45 + 0.55 * fract(v));
+    return vec3(v) * (0.88 + 0.12 * step(0.5, fract(v * 10.0)));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+
+    // the value under investigation: a wave that goes out of range...
+    float v = 1.5 * sin(uv.x * 2.0 + iTime) * uv.y + 0.5;
+    // ...and, on the right, square roots: of negative numbers below the middle, so NaN
+    if (uv.x > 1.2) v = sqrt(uv.y);
+
+    fragColor = vec4(debugValue(v), 1.0);
+}
+</script></figure>
+<p>Keep <code>debugValue</code> in your toolkit and drop it in anywhere: <code>fragColor = vec4(debugValue(d), 1.0); return;</code> shows you the value of <code>d</code> across the whole canvas. (Some drivers implement <code>isnan</code> loosely, assuming NaN never happens. If NaN slips past it, the pixels usually come out black, which is a clue in itself.)</p>
+
+<h2 id="inspector"><span class="sec-n">19.3</span>Reading exact values: the pixel inspector</h2>
+<p>Hover the workbench canvas and the inspector shows the pixel's <code>fragCoord</code>, its uv (0..1), its centered coordinates, and its color as three numbers from 0 to 1. To read the exact value of a variable at one spot, write it into the red channel and hover:</p>
+<pre class="snip"><code>fragColor = vec4(d, 0.0, 0.0, 1.0);          // hover: the first color number is d
+fragColor = vec4(d * 0.1, 0.0, 0.0, 1.0);    // for values up to 10: multiply what you read by 10
+fragColor = vec4(d * 0.5 + 0.5, 0.0, 0.0, 1.0);   // for -1..1: read r, then compute 2r - 1</code></pre>
+<p>The screen stores each color channel as one of 256 steps, so the inspector can only show values from 0 to 1, to about two decimal places. Scale and shift your value into that range first, as above.</p>
+
+<h2 id="isolate"><span class="sec-n">19.4</span>Divide and conquer</h2>
+<p>When you don't know where the problem is, shrink the search:</p>
+<ul>
+<li><b>Return early.</b> Show an intermediate value and <code>return;</code> right after, halfway down <code>mainImage</code>. If it already looks wrong, the bug is above; if not, below. Repeat, halving each time.</li>
+<li><b>Remove ingredients.</b> Replace a noise call with a constant, a texture read with a plain color, a loop's count with 1. When the problem disappears, the last thing you removed is involved.</li>
+<li><b>Simplify the inputs.</b> Freeze time, put the camera in a simple spot, test with a sphere instead of your full scene.</li>
+<li><b>Check your assumptions out loud.</b> "This should be 1 at the center and 0 at the edge." Then draw it and see whether it is. Most bugs are a value with the wrong range, the wrong sign or the wrong units.</li>
+</ul>
+
+<h2 id="nan"><span class="sec-n">19.5</span>Hunting NaN and infinity</h2>
+<p>NaN (Chapter 17) is the most confusing kind of bug, because it spreads silently and looks different on different GPUs: black on yours, garbage on a friend's phone. The usual sources, and their fixes:</p>
+<div class="table-wrap"><table>
+<tr><th>Source</th><th>Fix</th></tr>
+<tr><td><code>normalize(v)</code> where v can be zero</td><td>Make sure it can't be, or use <code>v / max(length(v), 1e-6)</code>.</td></tr>
+<tr><td><code>sqrt(x)</code> where x can dip below zero</td><td><code>sqrt(max(x, 0.0))</code>, as in Chapter 9's lit ball.</td></tr>
+<tr><td><code>pow(x, y)</code> with negative x</td><td><code>pow(abs(x), y)</code>, or clamp x to be positive. (pow is undefined for x &lt; 0.)</td></tr>
+<tr><td><code>acos(d)</code> or <code>asin(d)</code> of a dot product</td><td>Rounding can push a dot product of unit vectors to 1.0000001, outside acos's range. <code>acos(clamp(d, -1.0, 1.0))</code>.</td></tr>
+<tr><td><code>x / y</code> where y can be zero; <code>log(0.0)</code></td><td>These give infinity, which turns into NaN as soon as it meets <code>0.0 * inf</code> or <code>inf - inf</code>. Add a tiny amount: <code>x / max(y, 1e-6)</code>.</td></tr>
+</table></div>
+
+<h2 id="field-guide"><span class="sec-n">19.6</span>A field guide to common bugs</h2>
+<p>Symptoms you'll meet again and again, and where to look first:</p>
+<ul>
+<li><b>The whole canvas is black.</b> A NaN early on; a color that's always negative; a distance compared the wrong way round (<code>d &gt; 0.0</code> instead of <code>d &lt; 0.0</code>); a forgotten <code>fragColor =</code>.</li>
+<li><b>The whole canvas is white, or flat.</b> Values far above 1 (glows adding up, missing tone map), or a coordinate that doesn't vary: dividing by the wrong thing, or using <code>iResolution</code> where you meant <code>fragCoord</code>.</li>
+<li><b>Circles come out as ovals.</b> x and y divided by different numbers (Chapter 3): divide both by <code>iResolution.y</code>.</li>
+<li><b>Upside down.</b> Something used top-down coordinates: image files, the p5.js bridge, or mouse code (Chapter 18).</li>
+<li><b>A crack or seam along one line.</b> The atan seam (Chapter 10), a fract or mod jump, or a tile border.</li>
+<li><b>Jagged, shimmering or moiré edges.</b> Aliasing: use smooth edges with a pixel-sized width, and fade out detail that's finer than a pixel (Chapter 8).</li>
+<li><b>Banding in smooth, dark gradients.</b> The screen's 256 steps per channel. Add a touch of grain (Chapter 12).</li>
+<li><b>Raymarched surfaces with holes, speckles or missing parts.</b> Too few steps, or a distance that overestimates: after scaling, twisting or displacing, step more carefully (Chapter 14).</li>
+<li><b>Everything in shadow, or speckled shadows.</b> The light direction must point <em>toward</em> the light; start shadow rays slightly off the surface (Chapter 14).</li>
+<li><b>Fine at first, choppy after a while.</b> iTime has grown large and lost precision (Chapter 17).</li>
+<li><b>Fine on your computer, broken on a phone.</b> Lower precision, a NaN that your GPU happened to hide, or plain slowness.</li>
+</ul>
+<aside class="box aha"><span class="box-t">// AHA</span><p>You can't print from a shader, but you can paint every value at once. Draw the number you're unsure about, with a view that shows its range and sign, and most bugs become obvious in seconds.</p></aside>
+
+<h2 id="fix"><span class="sec-n">19.7</span>Three bugs to fix</h2>
+<p>Each example below has one bug. Load it into the workbench, use the techniques above to find it, and fix it. Each has a hint and the solution.</p>
+<h3>Bug 1: the dark ball</h3>
+<figure class="ex" id="ex-bug-dark" data-ex="bug-dark" data-label="Example 19.2" data-title="Bug 1: the light is up and to the left, so why is that side dark?" data-cfg='{}'><figcaption><span class="ex-n">Example 19.2</span><span>Bug 1: the light is up and to the left, so why is that side dark?</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>// BUG: the light is up and to the left of the ball, in front of it.
+// The ball should be brightly lit from that side. It isn't.
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    vec2 p = uv / 0.8;
+
+    vec3 col = vec3(0.02);
+    float r2 = dot(p, p);
+    if (r2 &lt; 1.0) {
+        vec3 n = vec3(p, sqrt(1.0 - r2));              // the surface normal (Chapter 7)
+        vec3 lightPos = vec3(-2.0, 2.0, 2.0);          // the light: left, up, in front
+        vec3 l = normalize(n - lightPos);              // direction toward the light
+        float diff = max(dot(n, l), 0.0);
+        col = vec3(1.0, 0.6, 0.3) * (0.03 + diff);
+    }
+    fragColor = vec4(pow(col, vec3(1.0 / 2.2)), 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+// BUG: the light is up and to the left of the ball, in front of it.
+// The ball should be brightly lit from that side. It isn't.
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    vec2 p = uv / 0.8;
+
+    vec3 col = vec3(0.02);
+    float r2 = dot(p, p);
+    if (r2 < 1.0) {
+        vec3 n = vec3(p, sqrt(1.0 - r2));              // the surface normal (Chapter 7)
+        vec3 lightPos = vec3(-2.0, 2.0, 2.0);          // the light: left, up, in front
+        vec3 l = normalize(n - lightPos);              // direction toward the light
+        float diff = max(dot(n, l), 0.0);
+        col = vec3(1.0, 0.6, 0.3) * (0.03 + diff);
+    }
+    fragColor = vec4(pow(col, vec3(1.0 / 2.2)), 1.0);
+}
+</script></figure>
+<details><summary>Hint</summary><div><p>Show <code>l * 0.5 + 0.5</code> as the color. Which way is <code>l</code> pointing: toward the upper left, or away from it? And which part of the ball is lit?</p></div></details>
+<details><summary>Solution</summary><div><p>The arrow from A to B is <code>B - A</code> (Chapter 7). The code computes <code>n - lightPos</code>, the arrow from the light to the surface: exactly backwards. So the ball is lit on the lower right, the side facing <em>away</em> from the light. The fix is <code>vec3 l = normalize(lightPos - n);</code>.</p></div></details>
+
+<h3>Bug 2: everything in shadow</h3>
+<figure class="ex long" id="ex-bug-shadow" data-ex="bug-shadow" data-label="Example 19.3" data-title="Bug 2: a ball should cast a shadow, but everything is dark" data-cfg='{}'><figcaption><span class="ex-n">Example 19.3</span><span>Bug 2: a ball should cast a shadow, but everything is dark</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>// BUG: a ball on a floor, lit by a low sun, should cast one long shadow.
+// Instead, everything is in shadow.
+float map(vec3 p) {
+    float ball = length(p - vec3(0.0, 0.6, 0.0)) - 0.6;
+    return min(ball, p.y);                        // p.y: the floor
+}
+
+vec3 calcNormal(vec3 p) {
+    vec2 e = vec2(0.001, 0.0);
+    return normalize(vec3(map(p + e.xyy) - map(p - e.xyy),
+                          map(p + e.yxy) - map(p - e.yxy),
+                          map(p + e.yyx) - map(p - e.yyx)));
+}
+
+float shadow(vec3 p, vec3 l) {                    // 1 = lit, 0 = something is in the way
+    float t = 0.0;
+    for (int i = 0; i &lt; 64; i++) {
+        float h = map(p + l * t);
+        if (h &lt; 0.001) return 0.0;
+        t += h;
+        if (t &gt; 10.0) break;
+    }
+    return 1.0;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    vec3 ro = vec3(0.0, 1.5, -4.0);
+    vec3 rd = normalize(vec3(uv.x, uv.y - 0.3, 1.6));
+
+    float t = 0.0;
+    for (int i = 0; i &lt; 100; i++) {
+        float d = map(ro + rd * t);
+        if (d &lt; 0.001 || t &gt; 20.0) break;
+        t += d;
+    }
+    vec3 col = vec3(0.55, 0.65, 0.8);
+    if (t &lt; 20.0) {
+        vec3 p = ro + rd * t;
+        vec3 n = calcNormal(p);
+        vec3 l = normalize(vec3(-0.7, 0.45, -0.3));   // toward a low sun
+        float diff = max(dot(n, l), 0.0) * shadow(p, l);
+        col = vec3(0.85, 0.75, 0.6) * (diff + 0.1 * (0.5 + 0.5 * n.y));
+    }
+    fragColor = vec4(pow(col, vec3(1.0 / 2.2)), 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn ex-more" type="button" data-label="Show all 46 lines">Show all 46 lines</button><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+// BUG: a ball on a floor, lit by a low sun, should cast one long shadow.
+// Instead, everything is in shadow.
+float map(vec3 p) {
+    float ball = length(p - vec3(0.0, 0.6, 0.0)) - 0.6;
+    return min(ball, p.y);                        // p.y: the floor
+}
+
+vec3 calcNormal(vec3 p) {
+    vec2 e = vec2(0.001, 0.0);
+    return normalize(vec3(map(p + e.xyy) - map(p - e.xyy),
+                          map(p + e.yxy) - map(p - e.yxy),
+                          map(p + e.yyx) - map(p - e.yyx)));
+}
+
+float shadow(vec3 p, vec3 l) {                    // 1 = lit, 0 = something is in the way
+    float t = 0.0;
+    for (int i = 0; i < 64; i++) {
+        float h = map(p + l * t);
+        if (h < 0.001) return 0.0;
+        t += h;
+        if (t > 10.0) break;
+    }
+    return 1.0;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+    vec3 ro = vec3(0.0, 1.5, -4.0);
+    vec3 rd = normalize(vec3(uv.x, uv.y - 0.3, 1.6));
+
+    float t = 0.0;
+    for (int i = 0; i < 100; i++) {
+        float d = map(ro + rd * t);
+        if (d < 0.001 || t > 20.0) break;
+        t += d;
+    }
+    vec3 col = vec3(0.55, 0.65, 0.8);
+    if (t < 20.0) {
+        vec3 p = ro + rd * t;
+        vec3 n = calcNormal(p);
+        vec3 l = normalize(vec3(-0.7, 0.45, -0.3));   // toward a low sun
+        float diff = max(dot(n, l), 0.0) * shadow(p, l);
+        col = vec3(0.85, 0.75, 0.6) * (diff + 0.1 * (0.5 + 0.5 * n.y));
+    }
+    fragColor = vec4(pow(col, vec3(1.0 / 2.2)), 1.0);
+}
+</script></figure>
+<details><summary>Hint</summary><div><p>Show the shadow value alone as the color: it's 0 everywhere. Now think about where the shadow ray starts, and what <code>map</code> returns at that exact spot.</p></div></details>
+<details><summary>Solution</summary><div><p>The shadow ray starts exactly on the surface it's shading, where <code>map</code> is (almost) zero, so the very first check "hits" the surface itself, everywhere. This is shadow acne at its most extreme (Chapter 14). Start a little way along the ray: <code>float t = 0.02;</code> (or start from <code>p + n * 0.01</code>).</p></div></details>
+
+<h3>Bug 3: washed out</h3>
+<figure class="ex" id="ex-bug-washed" data-ex="bug-washed" data-label="Example 19.4" data-title="Bug 3: six colored rings, so why is it mostly white?" data-cfg='{}'><figcaption><span class="ex-n">Example 19.4</span><span>Bug 3: six colored rings, so why is it mostly white?</span></figcaption><div class="ex-view"></div><pre class="ex-code"><code>// BUG: six glowing rings in six different colors. But it's mostly a white blur.
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+
+    vec3 col = vec3(0.0);
+    for (int i = 0; i &lt; 6; i++) {
+        float fi = float(i);
+        vec2 c = 0.45 * vec2(cos(iTime * 0.5 + fi), sin(iTime * 0.7 + fi * 1.3));
+        float d = abs(length(uv - c) - 0.3);
+        vec3 tint = 0.5 + 0.5 * cos(fi + vec3(0.0, 2.0, 4.0));
+        col += tint * 0.06 / d;                  // each ring adds its glow
+    }
+    fragColor = vec4(col, 1.0);
+}</code></pre><div class="ex-actions"><button class="sbtn icon" type="button" data-act="pp" aria-label="Pause preview"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1" fill="currentColor"/><rect x="9.5" y="2" width="3.5" height="12" rx="1" fill="currentColor"/></svg></button><span class="grow"></span><button class="sbtn" type="button" data-act="copy">Copy</button><button class="sbtn hot" type="button" data-act="edit">Edit in workbench</button></div><script type="text/x-glsl" data-pass="image">
+// BUG: six glowing rings in six different colors. But it's mostly a white blur.
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / iResolution.y;
+
+    vec3 col = vec3(0.0);
+    for (int i = 0; i < 6; i++) {
+        float fi = float(i);
+        vec2 c = 0.45 * vec2(cos(iTime * 0.5 + fi), sin(iTime * 0.7 + fi * 1.3));
+        float d = abs(length(uv - c) - 0.3);
+        vec3 tint = 0.5 + 0.5 * cos(fi + vec3(0.0, 2.0, 4.0));
+        col += tint * 0.06 / d;                  // each ring adds its glow
+    }
+    fragColor = vec4(col, 1.0);
+}
+</script></figure>
+<details><summary>Hint</summary><div><p>Paste in <code>debugValue</code> and look at <code>col.r</code>, <code>col.g</code> and <code>col.b</code> one at a time. How much of the canvas is above 1?</p></div></details>
+<details><summary>Solution</summary><div><p>Six glows of <code>0.06 / d</code> add up to far more than 1 across most of the canvas, and the screen clips everything above 1 to the same white, so the colors are lost. Either make each glow weaker (<code>0.01 / d</code>), or keep the glow and tone map at the end (Chapter 6): <code>col = 1.0 - exp(-col);</code>. Tone mapping keeps the brightness <em>and</em> the colors.</p></div></details>
+
+<h2 id="slow"><span class="sec-n">19.8</span>When it's slow</h2>
+<p>Performance problems are bugs too. The workbench shows its own symptom: when frames take too long it lowers the resolution, so a shader that suddenly looks soft is a shader that's too slow. To find out why:</p>
+<ul>
+<li><b>Make a heat map</b> of the expensive loop, as in Chapter 13: count iterations and show the count as color. You'll see exactly where the time goes.</li>
+<li><b>Remove parts and watch the frame rate</b>: shadows, AO, octaves of noise, the number of steps.</li>
+<li><b>Exit loops early</b> and skip lighting for pixels that hit nothing.</li>
+<li><b>Precompute</b> what doesn't change each frame into a buffer (Chapter 15).</li>
+</ul>
+
+<section class="summary">
+<h2>What you now know</h2>
+<ul>
+<li>Error messages: where (line), which word, what's wrong. Fix the first one first; syntax errors often show up a line late.</li>
+<li>Draw what you can't print: grey, signed red/blue, directions, contours, frozen time.</li>
+<li>A <code>debugValue</code> helper shows every range, including NaN and infinity, at a glance.</li>
+<li>The inspector reads exact values in 0..1: scale and shift into range first.</li>
+<li>Isolate by returning early, removing ingredients and simplifying inputs.</li>
+<li>Guard NaN sources: normalize of zero, sqrt and pow of negatives, acos out of range, division by zero.</li>
+</ul>
+</section>
+
+<div class="try"><span class="box-t">Exercises</span>
+<p><b>1.</b> Fix the four mistakes in the practice shader at the top of this chapter, using only the error messages.</p>
+<p><b>2.</b> Take any example from Chapters 13 or 14, and use <code>debugValue</code> to look at <code>t</code> (the ray distance), the normal's y, and the shadow value. Which one would you have guessed wrong?</p>
+<p><b>3.</b> Go back to the last shader of your own that didn't work as expected, and debug it with this chapter's tools.</p>
+</div>
+<p><b>Go deeper:</b> <a href="https://iquilezles.org/articles/" target="_blank" rel="noopener">Inigo Quilez's articles</a> (several, like those on normals and on soft shadows, explain bugs and artifacts in depth), and the <a href="https://www.khronos.org/opengl/wiki/Common_Mistakes" target="_blank" rel="noopener">OpenGL wiki's Common Mistakes page</a>.</p>
+
+<nav class="ch-nav" aria-label="Chapters"><a href="18-build-a-runner.html"><small>← Chapter 18</small><b>Build your own runner</b></a><a class="next" href="20-share-it.html"><small>Chapter 20 →</small><b>Share it, and where to go next</b></a></nav>
+</article>
+</div></div>
+</main>
+<div id="toast" role="status" aria-live="polite"></div>
+<script src="../assets/reference.js"></script><script src="../assets/engine.js"></script><script src="../assets/editor.js"></script><script src="../assets/widgets.js"></script><script src="../assets/site.js"></script>
+</body>
+</html>
